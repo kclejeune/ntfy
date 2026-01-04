@@ -1,32 +1,37 @@
-import type { Context } from 'hono';
-import type { AppContext } from '../router';
-import type { Message } from '../types/message';
-import { createOpenMessage, createKeepaliveMessage } from '../types/message';
-import { getMessagesSince, getMessagesSinceId, getLatestMessages, getMessageById } from '../database/messages';
+import type { Context } from "hono";
+import type { AppContext } from "../router";
+import type { Message } from "../types/message";
+import { createOpenMessage, createKeepaliveMessage } from "../types/message";
+import {
+  getMessagesSince,
+  getMessagesSinceId,
+  getLatestMessages,
+  getMessageById,
+} from "../database/messages";
 
 // Parse 'since' parameter
 interface SinceMarker {
-  type: 'all' | 'none' | 'time' | 'id';
+  type: "all" | "none" | "time" | "id";
   value: number | string;
 }
 
 function parseSince(since: string | null): SinceMarker {
-  if (!since || since === 'all') {
-    return { type: 'all', value: 0 };
+  if (!since || since === "all") {
+    return { type: "all", value: 0 };
   }
-  if (since === 'none') {
-    return { type: 'none', value: 0 };
+  if (since === "none") {
+    return { type: "none", value: 0 };
   }
 
   // Check if it's a message ID (12 alphanumeric chars)
   if (/^[a-zA-Z0-9]{12}$/.test(since)) {
-    return { type: 'id', value: since };
+    return { type: "id", value: since };
   }
 
   // Try to parse as timestamp
   const timestamp = parseInt(since, 10);
   if (!isNaN(timestamp)) {
-    return { type: 'time', value: timestamp };
+    return { type: "time", value: timestamp };
   }
 
   // Try to parse relative time (e.g., "10m", "1h", "1d")
@@ -34,19 +39,27 @@ function parseSince(since: string | null): SinceMarker {
   if (match) {
     const amount = parseInt(match[1], 10);
     const unit = match[2];
-    const multipliers: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+    const multipliers: Record<string, number> = {
+      s: 1,
+      m: 60,
+      h: 3600,
+      d: 86400,
+    };
     const seconds = amount * (multipliers[unit] || 1);
-    return { type: 'time', value: Math.floor(Date.now() / 1000) - seconds };
+    return { type: "time", value: Math.floor(Date.now() / 1000) - seconds };
   }
 
-  return { type: 'none', value: 0 };
+  return { type: "none", value: 0 };
 }
 
 // Handle WebSocket subscription
-export async function handleSubscribeWS(c: Context<AppContext>, topic: string): Promise<Response> {
+export async function handleSubscribeWS(
+  c: Context<AppContext>,
+  topic: string,
+): Promise<Response> {
   // Validate WebSocket upgrade
-  if (c.req.header('Upgrade') !== 'websocket') {
-    return c.text('Expected WebSocket upgrade', 426);
+  if (c.req.header("Upgrade") !== "websocket") {
+    return c.text("Expected WebSocket upgrade", 426);
   }
 
   // Forward to Durable Object
@@ -61,10 +74,13 @@ export async function handleSubscribeWS(c: Context<AppContext>, topic: string): 
 }
 
 // Handle SSE subscription
-export async function handleSubscribeSSE(c: Context<AppContext>, topic: string): Promise<Response> {
+export async function handleSubscribeSSE(
+  c: Context<AppContext>,
+  topic: string,
+): Promise<Response> {
   const url = new URL(c.req.url);
-  const since = parseSince(url.searchParams.get('since'));
-  const poll = url.searchParams.get('poll') === '1';
+  const since = parseSince(url.searchParams.get("since"));
+  const poll = url.searchParams.get("poll") === "1";
 
   // Create a TransformStream for SSE
   const { readable, writable } = new TransformStream();
@@ -77,22 +93,34 @@ export async function handleSubscribeSSE(c: Context<AppContext>, topic: string):
       try {
         // Send open event
         const openMsg = createOpenMessage(topic);
-        await writer.write(encoder.encode(`data: ${JSON.stringify(openMsg)}\n\n`));
+        await writer.write(
+          encoder.encode(`data: ${JSON.stringify(openMsg)}\n\n`),
+        );
 
         // Send historical messages if requested
-        if (since.type !== 'none') {
+        if (since.type !== "none") {
           let messages: Message[] = [];
 
-          if (since.type === 'all') {
+          if (since.type === "all") {
             messages = await getMessagesSince(c.env.DB, topic, 0);
-          } else if (since.type === 'time') {
-            messages = await getMessagesSince(c.env.DB, topic, since.value as number);
-          } else if (since.type === 'id') {
-            messages = await getMessagesSinceId(c.env.DB, topic, since.value as string);
+          } else if (since.type === "time") {
+            messages = await getMessagesSince(
+              c.env.DB,
+              topic,
+              since.value as number,
+            );
+          } else if (since.type === "id") {
+            messages = await getMessagesSinceId(
+              c.env.DB,
+              topic,
+              since.value as string,
+            );
           }
 
           for (const msg of messages) {
-            await writer.write(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`));
+            await writer.write(
+              encoder.encode(`data: ${JSON.stringify(msg)}\n\n`),
+            );
           }
         }
 
@@ -107,9 +135,12 @@ export async function handleSubscribeSSE(c: Context<AppContext>, topic: string):
         const stub = c.env.TOPIC_DO.get(doId);
 
         // Use WebSocket internally to get updates
-        const wsResponse = await stub.fetch(`https://internal/topic/${topic}/ws${url.search}`, {
-          headers: { Upgrade: 'websocket' },
-        });
+        const wsResponse = await stub.fetch(
+          `https://internal/topic/${topic}/ws${url.search}`,
+          {
+            headers: { Upgrade: "websocket" },
+          },
+        );
 
         const ws = wsResponse.webSocket;
         if (ws) {
@@ -118,19 +149,29 @@ export async function handleSubscribeSSE(c: Context<AppContext>, topic: string):
           // Keep connection alive and forward messages
           // eslint-disable-next-line no-constant-condition
           while (true) {
-            const event = await new Promise<MessageEvent | CloseEvent>((resolve) => {
-              ws.addEventListener('message', resolve as EventListener, { once: true });
-              ws.addEventListener('close', resolve as EventListener, { once: true });
-              ws.addEventListener('error', resolve as EventListener, { once: true });
-            });
+            const event = await new Promise<MessageEvent | CloseEvent>(
+              (resolve) => {
+                ws.addEventListener("message", resolve as EventListener, {
+                  once: true,
+                });
+                ws.addEventListener("close", resolve as EventListener, {
+                  once: true,
+                });
+                ws.addEventListener("error", resolve as EventListener, {
+                  once: true,
+                });
+              },
+            );
 
-            if (event.type === 'close' || event.type === 'error') {
+            if (event.type === "close" || event.type === "error") {
               break;
             }
 
-            if (event.type === 'message') {
+            if (event.type === "message") {
               try {
-                await writer.write(encoder.encode(`data: ${(event as MessageEvent).data}\n\n`));
+                await writer.write(
+                  encoder.encode(`data: ${(event as MessageEvent).data}\n\n`),
+                );
               } catch {
                 ws.close();
                 break;
@@ -148,25 +189,28 @@ export async function handleSubscribeSSE(c: Context<AppContext>, topic: string):
       } catch {
         // Already closed
       }
-    })()
+    })(),
   );
 
   return new Response(readable, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
     },
   });
 }
 
 // Handle JSON polling
-export async function handleSubscribeJSON(c: Context<AppContext>, topic: string): Promise<Response> {
+export async function handleSubscribeJSON(
+  c: Context<AppContext>,
+  topic: string,
+): Promise<Response> {
   const url = new URL(c.req.url);
-  const since = parseSince(url.searchParams.get('since'));
-  const poll = url.searchParams.get('poll') === '1';
-  const pollId = url.searchParams.get('id');
+  const since = parseSince(url.searchParams.get("since"));
+  const poll = url.searchParams.get("poll") === "1";
+  const pollId = url.searchParams.get("id");
 
   // If polling for specific message ID (used by iOS app after receiving push)
   // iOS app expects a single Message object, not an array
@@ -175,17 +219,17 @@ export async function handleSubscribeJSON(c: Context<AppContext>, topic: string)
     if (message && message.topic === topic) {
       return c.json(message);
     }
-    return c.json({ error: 'Message not found' }, 404);
+    return c.json({ error: "Message not found" }, 404);
   }
 
   // Get historical messages
   let messages: Message[] = [];
 
-  if (since.type === 'all') {
+  if (since.type === "all") {
     messages = await getMessagesSince(c.env.DB, topic, 0);
-  } else if (since.type === 'time') {
+  } else if (since.type === "time") {
     messages = await getMessagesSince(c.env.DB, topic, since.value as number);
-  } else if (since.type === 'id') {
+  } else if (since.type === "id") {
     messages = await getMessagesSinceId(c.env.DB, topic, since.value as string);
   } else {
     // 'none' - just return empty for poll, or latest for stream
@@ -209,11 +253,11 @@ export async function handleSubscribeJSON(c: Context<AppContext>, topic: string)
       try {
         // Send open event
         const openMsg = createOpenMessage(topic);
-        await writer.write(encoder.encode(JSON.stringify(openMsg) + '\n'));
+        await writer.write(encoder.encode(JSON.stringify(openMsg) + "\n"));
 
         // Send historical messages
         for (const msg of messages) {
-          await writer.write(encoder.encode(JSON.stringify(msg) + '\n'));
+          await writer.write(encoder.encode(JSON.stringify(msg) + "\n"));
         }
 
         // Connect to Durable Object for real-time updates
@@ -221,21 +265,24 @@ export async function handleSubscribeJSON(c: Context<AppContext>, topic: string)
         const stub = c.env.TOPIC_DO.get(doId);
 
         // Use WebSocket internally to get updates
-        const wsResponse = await stub.fetch(`https://internal/topic/${topic}/ws${url.search}`, {
-          headers: { Upgrade: 'websocket' },
-        });
+        const wsResponse = await stub.fetch(
+          `https://internal/topic/${topic}/ws${url.search}`,
+          {
+            headers: { Upgrade: "websocket" },
+          },
+        );
 
         const ws = wsResponse.webSocket;
         if (ws) {
           ws.accept();
-          ws.addEventListener('message', async (event) => {
+          ws.addEventListener("message", async (event) => {
             try {
-              await writer.write(encoder.encode(event.data + '\n'));
+              await writer.write(encoder.encode(event.data + "\n"));
             } catch {
               ws.close();
             }
           });
-          ws.addEventListener('close', async () => {
+          ws.addEventListener("close", async () => {
             try {
               await writer.close();
             } catch {
@@ -246,15 +293,15 @@ export async function handleSubscribeJSON(c: Context<AppContext>, topic: string)
       } catch (e) {
         // Connection error
       }
-    })()
+    })(),
   );
 
   return new Response(readable, {
     headers: {
-      'Content-Type': 'application/x-ndjson',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
     },
   });
 }

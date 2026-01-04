@@ -1,17 +1,39 @@
-import type { Context } from 'hono';
-import type { AppContext } from '../router';
-import type { AccountCreateRequest, AccountTokenIssueRequest, AccountResponse, AccountTokenResponse } from '../types/user';
-import { createUser, getUserByUsername, getUserById, getUserPasswordHash, usernameExists, createToken, getUserTokens, deleteToken, updateTokenLabel, updateUserPassword } from '../database/users';
-import { validateUsername, validatePassword, verifyPassword } from '../auth/password';
-import { createUserToken } from '../auth/jwt';
-import { extractAuth } from '../auth/middleware';
-import { publishSyncEventAsync } from '../sync/notify';
+import type { Context } from "hono";
+import type { AppContext } from "../router";
+import type {
+  AccountCreateRequest,
+  AccountTokenIssueRequest,
+  AccountResponse,
+  AccountTokenResponse,
+} from "../types/user";
+import {
+  createUser,
+  getUserByUsername,
+  getUserById,
+  getUserPasswordHash,
+  usernameExists,
+  createToken,
+  getUserTokens,
+  deleteToken,
+  updateTokenLabel,
+  updateUserPassword,
+} from "../database/users";
+import {
+  validateUsername,
+  validatePassword,
+  verifyPassword,
+} from "../auth/password";
+import { createUserToken } from "../auth/jwt";
+import { extractAuth } from "../auth/middleware";
+import { publishSyncEventAsync } from "../sync/notify";
 
 // Token expiry duration in seconds (72 hours, matches original ntfy)
 const TOKEN_EXPIRY_SECONDS = 72 * 60 * 60;
 
 // POST /v1/account - Create account
-export async function handleAccountCreate(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountCreate(
+  c: Context<AppContext>,
+): Promise<Response> {
   const body = (await c.req.json()) as AccountCreateRequest;
 
   // Validate username
@@ -28,14 +50,19 @@ export async function handleAccountCreate(c: Context<AppContext>): Promise<Respo
 
   // Check if username already exists
   if (await usernameExists(c.env.DB, body.username)) {
-    return c.json({ code: 40901, error: 'Username already exists' }, 409);
+    return c.json({ code: 40901, error: "Username already exists" }, 409);
   }
 
   // Create the user
   const user = await createUser(c.env.DB, body.username, body.password);
 
   // Create an initial token with 72-hour expiry
-  const token = await createToken(c.env.DB, user.id, 'default', TOKEN_EXPIRY_SECONDS);
+  const token = await createToken(
+    c.env.DB,
+    user.id,
+    "default",
+    TOKEN_EXPIRY_SECONDS,
+  );
 
   return c.json({
     username: user.username,
@@ -54,7 +81,7 @@ export async function handleAccountCreate(c: Context<AppContext>): Promise<Respo
 
 // Default limits for free tier
 const DEFAULT_LIMITS = {
-  basis: 'tier',
+  basis: "tier",
   messages: 0, // unlimited
   messages_expiry_duration: 43200, // 12 hours
   emails: 0,
@@ -81,30 +108,41 @@ const DEFAULT_STATS = {
 };
 
 // GET /v1/account - Get account info
-export async function handleAccountGet(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountGet(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   // Get user's tokens
   const tokens = await getUserTokens(c.env.DB, auth.user.id);
 
   // Get user's settings
-  const settingsRow = await c.env.DB.prepare('SELECT settings FROM users WHERE id = ?')
+  const settingsRow = await c.env.DB.prepare(
+    "SELECT settings FROM users WHERE id = ?",
+  )
     .bind(auth.user.id)
     .first<{ settings: string }>();
-  let settings: { notification?: { sound?: string; min_priority?: number; delete_after?: number }; language?: string } = {};
+  let settings: {
+    notification?: {
+      sound?: string;
+      min_priority?: number;
+      delete_after?: number;
+    };
+    language?: string;
+  } = {};
   try {
-    settings = JSON.parse(settingsRow?.settings || '{}');
+    settings = JSON.parse(settingsRow?.settings || "{}");
   } catch {
     // Ignore parse errors
   }
 
   // Get user's subscriptions
   const subscriptionsResult = await c.env.DB.prepare(
-    'SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?'
+    "SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?",
   )
     .bind(auth.user.id)
     .all<{ base_url: string; topic: string; display_name: string }>();
@@ -116,15 +154,15 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
 
   // Get user's reservations
   const reservationsResult = await c.env.DB.prepare(
-    'SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?'
+    "SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?",
   )
     .bind(auth.user.id)
     .all<{ topic: string; everyone_read: number; everyone_write: number }>();
   const reservations = (reservationsResult.results || []).map((r) => {
-    let everyone = 'deny-all';
-    if (r.everyone_read && r.everyone_write) everyone = 'read-write';
-    else if (r.everyone_read) everyone = 'read-only';
-    else if (r.everyone_write) everyone = 'write-only';
+    let everyone = "deny-all";
+    if (r.everyone_read && r.everyone_write) everyone = "read-write";
+    else if (r.everyone_read) everyone = "read-only";
+    else if (r.everyone_write) everyone = "write-only";
     return { topic: r.topic, everyone };
   });
 
@@ -134,7 +172,7 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
     sync_topic: auth.user.sync_topic,
     tier: {
       code: auth.user.tier,
-      name: auth.user.tier === 'default' ? 'Free' : auth.user.tier,
+      name: auth.user.tier === "default" ? "Free" : auth.user.tier,
     },
     limits: DEFAULT_LIMITS,
     stats: {
@@ -157,18 +195,27 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
 }
 
 // POST /v1/account/token - Create new token
-export async function handleAccountTokenCreate(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountTokenCreate(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
-  const body = (await c.req.json().catch(() => ({}))) as AccountTokenIssueRequest;
+  const body = (await c.req
+    .json()
+    .catch(() => ({}))) as AccountTokenIssueRequest;
 
   // Use provided expiry or default to 72 hours
   const expiresIn = body.expires || TOKEN_EXPIRY_SECONDS;
-  const token = await createToken(c.env.DB, auth.user.id, body.label || '', expiresIn);
+  const token = await createToken(
+    c.env.DB,
+    auth.user.id,
+    body.label || "",
+    expiresIn,
+  );
 
   // Notify other clients
   publishSyncEventAsync(c.executionCtx, c.env, auth.user);
@@ -182,17 +229,20 @@ export async function handleAccountTokenCreate(c: Context<AppContext>): Promise<
 }
 
 // DELETE /v1/account/token/:token - Delete a token
-export async function handleAccountTokenDelete(c: Context<AppContext>, tokenId: string): Promise<Response> {
+export async function handleAccountTokenDelete(
+  c: Context<AppContext>,
+  tokenId: string,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   const deleted = await deleteToken(c.env.DB, tokenId, auth.user.id);
 
   if (!deleted) {
-    return c.json({ code: 40401, error: 'Token not found' }, 404);
+    return c.json({ code: 40401, error: "Token not found" }, 404);
   }
 
   // Notify other clients
@@ -204,16 +254,21 @@ export async function handleAccountTokenDelete(c: Context<AppContext>, tokenId: 
 // PATCH /v1/account/token - Update a token (rename/extend)
 // If no body is provided, extends the token used for authentication by 72 hours
 // If body contains {token, label, expires}, updates that specific token
-export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountTokenUpdate(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   // Must be authenticated with a token (not basic auth)
   if (!auth.token) {
-    return c.json({ code: 40001, error: 'Bearer token authentication required' }, 400);
+    return c.json(
+      { code: 40001, error: "Bearer token authentication required" },
+      400,
+    );
   }
 
   // Try to parse body, default to empty object
@@ -224,7 +279,7 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
       body = JSON.parse(text);
     }
   } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+    return c.json({ code: 40001, error: "Invalid JSON body" }, 400);
   }
 
   // If no token in body, use the token from auth (update current token)
@@ -232,12 +287,19 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
 
   // If expires provided (including 0 for never), use it; otherwise extend by 72 hours
   const now = Math.floor(Date.now() / 1000);
-  const expires = body.expires !== undefined ? body.expires : now + TOKEN_EXPIRY_SECONDS;
+  const expires =
+    body.expires !== undefined ? body.expires : now + TOKEN_EXPIRY_SECONDS;
 
-  const updated = await updateTokenLabel(c.env.DB, tokenId, auth.user.id, body.label ?? auth.token.label, expires);
+  const updated = await updateTokenLabel(
+    c.env.DB,
+    tokenId,
+    auth.user.id,
+    body.label ?? auth.token.label,
+    expires,
+  );
 
   if (!updated) {
-    return c.json({ code: 40401, error: 'Token not found' }, 404);
+    return c.json({ code: 40401, error: "Token not found" }, 404);
   }
 
   // Notify other clients
@@ -252,14 +314,19 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
 }
 
 // POST /v1/account/password - Change password
-export async function handleAccountPasswordChange(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountPasswordChange(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
-  const body = (await c.req.json()) as { password: string; new_password: string };
+  const body = (await c.req.json()) as {
+    password: string;
+    new_password: string;
+  };
 
   // Validate new password
   const passwordValidation = validatePassword(body.new_password);
@@ -270,12 +337,12 @@ export async function handleAccountPasswordChange(c: Context<AppContext>): Promi
   // Verify current password
   const currentHash = await getUserPasswordHash(c.env.DB, auth.user.id);
   if (!currentHash) {
-    return c.json({ code: 50001, error: 'Internal error' }, 500);
+    return c.json({ code: 50001, error: "Internal error" }, 500);
   }
 
   const valid = await verifyPassword(body.password, currentHash);
   if (!valid) {
-    return c.json({ code: 40101, error: 'Invalid password' }, 401);
+    return c.json({ code: 40101, error: "Invalid password" }, 401);
   }
 
   // Update password
@@ -288,11 +355,13 @@ export async function handleAccountPasswordChange(c: Context<AppContext>): Promi
 }
 
 // DELETE /v1/account - Delete account
-export async function handleAccountDelete(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountDelete(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   const body = (await c.req.json()) as { password: string };
@@ -300,16 +369,18 @@ export async function handleAccountDelete(c: Context<AppContext>): Promise<Respo
   // Verify password
   const currentHash = await getUserPasswordHash(c.env.DB, auth.user.id);
   if (!currentHash) {
-    return c.json({ code: 50001, error: 'Internal error' }, 500);
+    return c.json({ code: 50001, error: "Internal error" }, 500);
   }
 
   const valid = await verifyPassword(body.password, currentHash);
   if (!valid) {
-    return c.json({ code: 40101, error: 'Invalid password' }, 401);
+    return c.json({ code: 40101, error: "Invalid password" }, 401);
   }
 
   // Delete user (cascades to tokens and access)
-  await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(auth.user.id).run();
+  await c.env.DB.prepare("DELETE FROM users WHERE id = ?")
+    .bind(auth.user.id)
+    .run();
 
   return c.json({ success: true });
 }
@@ -319,7 +390,7 @@ export async function handleAuth(c: Context<AppContext>): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   // Return success if already authenticated
@@ -335,34 +406,39 @@ interface SubscriptionRequest {
 }
 
 // POST /v1/account/subscription - Add subscription (sync across devices)
-export async function handleAccountSubscriptionAdd(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountSubscriptionAdd(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   let body: SubscriptionRequest;
   try {
     body = (await c.req.json()) as SubscriptionRequest;
   } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+    return c.json({ code: 40001, error: "Invalid JSON body" }, 400);
   }
 
   if (!body.base_url || !body.topic) {
-    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+    return c.json(
+      { code: 40001, error: "base_url and topic are required" },
+      400,
+    );
   }
 
   try {
     await c.env.DB.prepare(
-      'INSERT INTO subscriptions (user_id, base_url, topic, display_name) VALUES (?, ?, ?, ?)'
+      "INSERT INTO subscriptions (user_id, base_url, topic, display_name) VALUES (?, ?, ?, ?)",
     )
-      .bind(auth.user.id, body.base_url, body.topic, body.display_name || '')
+      .bind(auth.user.id, body.base_url, body.topic, body.display_name || "")
       .run();
   } catch (e: unknown) {
     // Check for unique constraint violation
-    if (e instanceof Error && e.message.includes('UNIQUE')) {
-      return c.json({ code: 40901, error: 'Subscription already exists' }, 409);
+    if (e instanceof Error && e.message.includes("UNIQUE")) {
+      return c.json({ code: 40901, error: "Subscription already exists" }, 409);
     }
     throw e;
   }
@@ -373,20 +449,22 @@ export async function handleAccountSubscriptionAdd(c: Context<AppContext>): Prom
   return c.json({
     base_url: body.base_url,
     topic: body.topic,
-    display_name: body.display_name || '',
+    display_name: body.display_name || "",
   });
 }
 
 // GET /v1/account/subscription - Get all subscriptions
-export async function handleAccountSubscriptionList(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountSubscriptionList(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   const result = await c.env.DB.prepare(
-    'SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?'
+    "SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?",
   )
     .bind(auth.user.id)
     .all<{ base_url: string; topic: string; display_name: string }>();
@@ -396,19 +474,21 @@ export async function handleAccountSubscriptionList(c: Context<AppContext>): Pro
 
 // DELETE /v1/account/subscription - Delete subscription
 // Supports both JSON body and headers (X-BaseUrl, X-Topic) for compatibility with web UI
-export async function handleAccountSubscriptionDelete(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountSubscriptionDelete(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   let baseUrl: string | undefined;
   let topic: string | undefined;
 
   // Try headers first (web UI sends these for DELETE requests)
-  const headerBaseUrl = c.req.header('X-BaseUrl');
-  const headerTopic = c.req.header('X-Topic');
+  const headerBaseUrl = c.req.header("X-BaseUrl");
+  const headerTopic = c.req.header("X-Topic");
 
   if (headerBaseUrl && headerTopic) {
     baseUrl = headerBaseUrl;
@@ -425,17 +505,23 @@ export async function handleAccountSubscriptionDelete(c: Context<AppContext>): P
   }
 
   if (!baseUrl || !topic) {
-    return c.json({ code: 40001, error: 'base_url and topic are required (via headers or JSON body)' }, 400);
+    return c.json(
+      {
+        code: 40001,
+        error: "base_url and topic are required (via headers or JSON body)",
+      },
+      400,
+    );
   }
 
   const result = await c.env.DB.prepare(
-    'DELETE FROM subscriptions WHERE user_id = ? AND base_url = ? AND topic = ?'
+    "DELETE FROM subscriptions WHERE user_id = ? AND base_url = ? AND topic = ?",
   )
     .bind(auth.user.id, baseUrl, topic)
     .run();
 
   if ((result.meta.changes || 0) === 0) {
-    return c.json({ code: 40401, error: 'Subscription not found' }, 404);
+    return c.json({ code: 40401, error: "Subscription not found" }, 404);
   }
 
   // Notify other clients
@@ -452,51 +538,55 @@ interface ReservationRequest {
 }
 
 // POST /v1/account/reservation - Reserve a topic
-export async function handleAccountReservationAdd(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountReservationAdd(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   let body: ReservationRequest;
   try {
     body = (await c.req.json()) as ReservationRequest;
   } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+    return c.json({ code: 40001, error: "Invalid JSON body" }, 400);
   }
 
   if (!body.topic) {
-    return c.json({ code: 40001, error: 'topic is required' }, 400);
+    return c.json({ code: 40001, error: "topic is required" }, 400);
   }
 
   // Validate topic format
   if (!/^[-_A-Za-z0-9]{1,64}$/.test(body.topic)) {
-    return c.json({ code: 40001, error: 'Invalid topic format' }, 400);
+    return c.json({ code: 40001, error: "Invalid topic format" }, 400);
   }
 
   // Parse permissions
   let everyoneRead = 0;
   let everyoneWrite = 0;
   switch (body.everyone) {
-    case 'read-write':
+    case "read-write":
       everyoneRead = 1;
       everyoneWrite = 1;
       break;
-    case 'read-only':
+    case "read-only":
       everyoneRead = 1;
       break;
-    case 'write-only':
+    case "write-only":
       everyoneWrite = 1;
       break;
-    case 'deny-all':
+    case "deny-all":
     default:
       // Both stay 0
       break;
   }
 
   // Check if already reserved
-  const existing = await c.env.DB.prepare('SELECT user_id FROM reservations WHERE topic = ?')
+  const existing = await c.env.DB.prepare(
+    "SELECT user_id FROM reservations WHERE topic = ?",
+  )
     .bind(body.topic)
     .first<{ user_id: string }>();
 
@@ -504,24 +594,27 @@ export async function handleAccountReservationAdd(c: Context<AppContext>): Promi
     if (existing.user_id === auth.user.id) {
       // Update existing reservation
       await c.env.DB.prepare(
-        'UPDATE reservations SET everyone_read = ?, everyone_write = ? WHERE topic = ?'
+        "UPDATE reservations SET everyone_read = ?, everyone_write = ? WHERE topic = ?",
       )
         .bind(everyoneRead, everyoneWrite, body.topic)
         .run();
     } else {
-      return c.json({ code: 40901, error: 'Topic already reserved by another user' }, 409);
+      return c.json(
+        { code: 40901, error: "Topic already reserved by another user" },
+        409,
+      );
     }
   } else {
     // Create new reservation
     await c.env.DB.prepare(
-      'INSERT INTO reservations (topic, user_id, everyone_read, everyone_write) VALUES (?, ?, ?, ?)'
+      "INSERT INTO reservations (topic, user_id, everyone_read, everyone_write) VALUES (?, ?, ?, ?)",
     )
       .bind(body.topic, auth.user.id, everyoneRead, everyoneWrite)
       .run();
 
     // Grant owner full access
     await c.env.DB.prepare(
-      'INSERT OR REPLACE INTO user_access (user_id, topic, read, write, owner_user_id) VALUES (?, ?, 1, 1, ?)'
+      "INSERT OR REPLACE INTO user_access (user_id, topic, read, write, owner_user_id) VALUES (?, ?, 1, 1, ?)",
     )
       .bind(auth.user.id, body.topic, auth.user.id)
       .run();
@@ -532,29 +625,31 @@ export async function handleAccountReservationAdd(c: Context<AppContext>): Promi
 
   return c.json({
     topic: body.topic,
-    everyone: body.everyone || 'deny-all',
+    everyone: body.everyone || "deny-all",
   });
 }
 
 // GET /v1/account/reservation - Get all reservations
-export async function handleAccountReservationList(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountReservationList(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   const result = await c.env.DB.prepare(
-    'SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?'
+    "SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?",
   )
     .bind(auth.user.id)
     .all<{ topic: string; everyone_read: number; everyone_write: number }>();
 
   const reservations = (result.results || []).map((r) => {
-    let everyone = 'deny-all';
-    if (r.everyone_read && r.everyone_write) everyone = 'read-write';
-    else if (r.everyone_read) everyone = 'read-only';
-    else if (r.everyone_write) everyone = 'write-only';
+    let everyone = "deny-all";
+    if (r.everyone_read && r.everyone_write) everyone = "read-write";
+    else if (r.everyone_read) everyone = "read-only";
+    else if (r.everyone_write) everyone = "write-only";
 
     return { topic: r.topic, everyone };
   });
@@ -563,25 +658,30 @@ export async function handleAccountReservationList(c: Context<AppContext>): Prom
 }
 
 // DELETE /v1/account/reservation/:topic - Delete reservation
-export async function handleAccountReservationDelete(c: Context<AppContext>, topic: string): Promise<Response> {
+export async function handleAccountReservationDelete(
+  c: Context<AppContext>,
+  topic: string,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   const result = await c.env.DB.prepare(
-    'DELETE FROM reservations WHERE topic = ? AND user_id = ?'
+    "DELETE FROM reservations WHERE topic = ? AND user_id = ?",
   )
     .bind(topic, auth.user.id)
     .run();
 
   if ((result.meta.changes || 0) === 0) {
-    return c.json({ code: 40401, error: 'Reservation not found' }, 404);
+    return c.json({ code: 40401, error: "Reservation not found" }, 404);
   }
 
   // Also remove owner access
-  await c.env.DB.prepare('DELETE FROM user_access WHERE topic = ? AND owner_user_id = ?')
+  await c.env.DB.prepare(
+    "DELETE FROM user_access WHERE topic = ? AND owner_user_id = ?",
+  )
     .bind(topic, auth.user.id)
     .run();
 
@@ -603,28 +703,30 @@ interface UserSettings {
 }
 
 // PATCH /v1/account/settings - Update user settings
-export async function handleAccountSettingsUpdate(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountSettingsUpdate(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   let body: UserSettings;
   try {
     body = (await c.req.json()) as UserSettings;
   } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+    return c.json({ code: 40001, error: "Invalid JSON body" }, 400);
   }
 
   // Get current settings
-  const row = await c.env.DB.prepare('SELECT settings FROM users WHERE id = ?')
+  const row = await c.env.DB.prepare("SELECT settings FROM users WHERE id = ?")
     .bind(auth.user.id)
     .first<{ settings: string }>();
 
   let currentSettings: UserSettings = {};
   try {
-    currentSettings = JSON.parse(row?.settings || '{}');
+    currentSettings = JSON.parse(row?.settings || "{}");
   } catch {
     // Ignore parse errors, start fresh
   }
@@ -640,7 +742,7 @@ export async function handleAccountSettingsUpdate(c: Context<AppContext>): Promi
   };
 
   // Update in database
-  await c.env.DB.prepare('UPDATE users SET settings = ? WHERE id = ?')
+  await c.env.DB.prepare("UPDATE users SET settings = ? WHERE id = ?")
     .bind(JSON.stringify(newSettings), auth.user.id)
     .run();
 
@@ -653,32 +755,41 @@ export async function handleAccountSettingsUpdate(c: Context<AppContext>): Promi
 // ==================== Subscription update endpoint ====================
 
 // PATCH /v1/account/subscription - Update subscription display name
-export async function handleAccountSubscriptionUpdate(c: Context<AppContext>): Promise<Response> {
+export async function handleAccountSubscriptionUpdate(
+  c: Context<AppContext>,
+): Promise<Response> {
   const auth = await extractAuth(c);
 
   if (auth.anonymous || !auth.user) {
-    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+    return c.json({ code: 40101, error: "Unauthorized" }, 401);
   }
 
   let body: { base_url: string; topic: string; display_name?: string };
   try {
-    body = (await c.req.json()) as { base_url: string; topic: string; display_name?: string };
+    body = (await c.req.json()) as {
+      base_url: string;
+      topic: string;
+      display_name?: string;
+    };
   } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+    return c.json({ code: 40001, error: "Invalid JSON body" }, 400);
   }
 
   if (!body.base_url || !body.topic) {
-    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+    return c.json(
+      { code: 40001, error: "base_url and topic are required" },
+      400,
+    );
   }
 
   const result = await c.env.DB.prepare(
-    'UPDATE subscriptions SET display_name = ? WHERE user_id = ? AND base_url = ? AND topic = ?'
+    "UPDATE subscriptions SET display_name = ? WHERE user_id = ? AND base_url = ? AND topic = ?",
   )
-    .bind(body.display_name || '', auth.user.id, body.base_url, body.topic)
+    .bind(body.display_name || "", auth.user.id, body.base_url, body.topic)
     .run();
 
   if ((result.meta.changes || 0) === 0) {
-    return c.json({ code: 40401, error: 'Subscription not found' }, 404);
+    return c.json({ code: 40401, error: "Subscription not found" }, 404);
   }
 
   // Notify other clients
@@ -687,14 +798,16 @@ export async function handleAccountSubscriptionUpdate(c: Context<AppContext>): P
   return c.json({
     base_url: body.base_url,
     topic: body.topic,
-    display_name: body.display_name || '',
+    display_name: body.display_name || "",
   });
 }
 
 // ==================== Tiers endpoint ====================
 
 // GET /v1/tiers - Get available tiers (returns empty for self-hosted)
-export async function handleTiersList(c: Context<AppContext>): Promise<Response> {
+export async function handleTiersList(
+  c: Context<AppContext>,
+): Promise<Response> {
   // For self-hosted instances without billing, return empty array
   return c.json([]);
 }

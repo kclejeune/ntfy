@@ -1,5 +1,10 @@
-import type { Env } from '../types/env';
-import { type Message, createOpenMessage, createKeepaliveMessage, EVENT_MESSAGE } from '../types/message';
+import type { Env } from "../types/env";
+import {
+  type Message,
+  createOpenMessage,
+  createKeepaliveMessage,
+  EVENT_MESSAGE,
+} from "../types/message";
 
 interface SessionInfo {
   connectedAt: number;
@@ -22,8 +27,9 @@ export class TopicDO implements DurableObject {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.topic = '';
-    this.keepaliveInterval = parseInt(env.NTFY_KEEPALIVE_INTERVAL || '45', 10) * 1000;
+    this.topic = "";
+    this.keepaliveInterval =
+      parseInt(env.NTFY_KEEPALIVE_INTERVAL || "45", 10) * 1000;
 
     // Set up alarm for keepalive messages
     this.state.storage.setAlarm(Date.now() + this.keepaliveInterval);
@@ -33,26 +39,26 @@ export class TopicDO implements DurableObject {
     const url = new URL(request.url);
 
     // Extract topic from the DO name (passed in the path)
-    if (url.pathname.startsWith('/topic/')) {
-      this.topic = url.pathname.split('/')[2];
+    if (url.pathname.startsWith("/topic/")) {
+      this.topic = url.pathname.split("/")[2];
     }
 
     // Handle WebSocket upgrade
-    if (request.headers.get('Upgrade') === 'websocket') {
+    if (request.headers.get("Upgrade") === "websocket") {
       return this.handleWebSocketUpgrade(request);
     }
 
     // Handle publish (internal call from main worker)
-    if (url.pathname.endsWith('/publish') && request.method === 'POST') {
+    if (url.pathname.endsWith("/publish") && request.method === "POST") {
       return this.handlePublish(request);
     }
 
     // Handle SSE subscription
-    if (url.pathname.endsWith('/sse')) {
+    if (url.pathname.endsWith("/sse")) {
       return this.handleSSE(request);
     }
 
-    return new Response('Not Found', { status: 404 });
+    return new Response("Not Found", { status: 404 });
   }
 
   private async handleWebSocketUpgrade(request: Request): Promise<Response> {
@@ -100,7 +106,7 @@ export class TopicDO implements DurableObject {
     }
 
     return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
     });
   }
 
@@ -123,22 +129,25 @@ export class TopicDO implements DurableObject {
 
     return new Response(readable, {
       headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
       },
     });
   }
 
   // Handle incoming WebSocket messages
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  async webSocketMessage(
+    ws: WebSocket,
+    message: string | ArrayBuffer,
+  ): Promise<void> {
     // Handle ping/pong or other client messages
-    if (typeof message === 'string') {
+    if (typeof message === "string") {
       try {
         const data = JSON.parse(message);
-        if (data.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong' }));
+        if (data.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
         }
       } catch {
         // Ignore parse errors
@@ -147,7 +156,12 @@ export class TopicDO implements DurableObject {
   }
 
   // Handle WebSocket close
-  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean,
+  ): Promise<void> {
     // WebSocket automatically removed from getWebSockets() when closed
   }
 
@@ -174,25 +188,26 @@ export class TopicDO implements DurableObject {
     this.state.storage.setAlarm(Date.now() + this.keepaliveInterval);
   }
 
-  private parseFilters(params: URLSearchParams): SessionInfo['filters'] {
-    const filters: SessionInfo['filters'] = {};
+  private parseFilters(params: URLSearchParams): SessionInfo["filters"] {
+    const filters: SessionInfo["filters"] = {};
 
-    const id = params.get('id');
+    const id = params.get("id");
     if (id) filters.id = id;
 
-    const message = params.get('message') || params.get('m');
+    const message = params.get("message") || params.get("m");
     if (message) filters.message = message;
 
-    const title = params.get('title') || params.get('t');
+    const title = params.get("title") || params.get("t");
     if (title) filters.title = title;
 
-    const tags = params.get('tags') || params.get('tag');
-    if (tags) filters.tags = tags.split(',').filter(Boolean);
+    const tags = params.get("tags") || params.get("tag");
+    if (tags) filters.tags = tags.split(",").filter(Boolean);
 
-    const priority = params.get('priority') || params.get('prio') || params.get('p');
+    const priority =
+      params.get("priority") || params.get("prio") || params.get("p");
     if (priority) {
       filters.priority = priority
-        .split(',')
+        .split(",")
         .map((p) => parseInt(p, 10))
         .filter((p) => !isNaN(p));
     }
@@ -200,7 +215,10 @@ export class TopicDO implements DurableObject {
     return Object.keys(filters).length > 0 ? filters : undefined;
   }
 
-  private passesFilters(msg: Message, filters?: SessionInfo['filters']): boolean {
+  private passesFilters(
+    msg: Message,
+    filters?: SessionInfo["filters"],
+  ): boolean {
     if (!filters) return true;
     if (msg.event !== EVENT_MESSAGE) return true; // Filters only apply to messages
 

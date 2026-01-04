@@ -1,6 +1,6 @@
-import type { Env } from '../types/env';
-import type { User } from '../types/user';
-import { generateMessageId, EVENT_MESSAGE } from '../types/message';
+import type { Env } from "../types/env";
+import type { User } from "../types/user";
+import { generateMessageId, EVENT_MESSAGE } from "../types/message";
 
 /**
  * Publish a sync event to a user's sync topic.
@@ -17,7 +17,7 @@ export async function publishSyncEvent(env: Env, user: User): Promise<void> {
     time: now,
     event: EVENT_MESSAGE,
     topic: user.sync_topic,
-    message: JSON.stringify({ event: 'sync' }),
+    message: JSON.stringify({ event: "sync" }),
   };
 
   // Broadcast via Durable Object
@@ -26,8 +26,8 @@ export async function publishSyncEvent(env: Env, user: User): Promise<void> {
     const stub = env.TOPIC_DO.get(doId);
 
     await stub.fetch(`https://internal/topic/${user.sync_topic}/publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(syncMessage),
     });
 
@@ -41,6 +41,10 @@ export async function publishSyncEvent(env: Env, user: User): Promise<void> {
  * Publish sync event in background (non-blocking).
  * Use this from handlers to avoid slowing down the response.
  */
-export function publishSyncEventAsync(ctx: ExecutionContext, env: Env, user: User): void {
+export function publishSyncEventAsync(
+  ctx: ExecutionContext,
+  env: Env,
+  user: User,
+): void {
   ctx.waitUntil(publishSyncEvent(env, user));
 }

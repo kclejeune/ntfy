@@ -1,8 +1,8 @@
 // Message event types
-export const EVENT_OPEN = 'open';
-export const EVENT_KEEPALIVE = 'keepalive';
-export const EVENT_MESSAGE = 'message';
-export const EVENT_POLL_REQUEST = 'poll_request';
+export const EVENT_OPEN = "open";
+export const EVENT_KEEPALIVE = "keepalive";
+export const EVENT_MESSAGE = "message";
+export const EVENT_POLL_REQUEST = "poll_request";
 
 export const MESSAGE_ID_LENGTH = 12;
 
@@ -23,7 +23,7 @@ export interface Attachment {
 
 export interface Action {
   id: string;
-  action: 'view' | 'broadcast' | 'http';
+  action: "view" | "broadcast" | "http";
   label: string;
   clear?: boolean;
   url?: string;
@@ -114,8 +114,9 @@ export function rowToMessage(row: MessageRow): Message {
   if (row.expires) msg.expires = row.expires;
   if (row.title) msg.title = row.title;
   if (row.message) msg.message = row.message;
-  if (row.priority && row.priority !== PRIORITY_DEFAULT) msg.priority = row.priority;
-  if (row.tags) msg.tags = row.tags.split(',').filter(Boolean);
+  if (row.priority && row.priority !== PRIORITY_DEFAULT)
+    msg.priority = row.priority;
+  if (row.tags) msg.tags = row.tags.split(",").filter(Boolean);
   if (row.click) msg.click = row.click;
   if (row.icon) msg.icon = row.icon;
   if (row.actions) {
@@ -142,8 +143,9 @@ export function rowToMessage(row: MessageRow): Message {
 
 // Generate random message ID
 export function generateMessageId(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
+  const chars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "";
   for (let i = 0; i < MESSAGE_ID_LENGTH; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }

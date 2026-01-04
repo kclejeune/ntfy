@@ -1,5 +1,5 @@
-import type { Message } from '../types/message';
-import type { Env } from '../types/env';
+import type { Message } from "../types/message";
+import type { Env } from "../types/env";
 
 /**
  * Forward a poll request to upstream server (ntfy.sh) for iOS push notifications.
@@ -11,7 +11,10 @@ import type { Env } from '../types/env';
  * Privacy: Only the message ID and topic hash are sent to the upstream server.
  * The actual message content never leaves our server.
  */
-export async function forwardPollRequest(env: Env, message: Message): Promise<void> {
+export async function forwardPollRequest(
+  env: Env,
+  message: Message,
+): Promise<void> {
   if (!env.NTFY_UPSTREAM_BASE_URL || !env.NTFY_BASE_URL) {
     return; // Upstream not configured
   }
@@ -26,27 +29,29 @@ export async function forwardPollRequest(env: Env, message: Message): Promise<vo
 
   // Match the original ntfy server's poll request format
   const headers: Record<string, string> = {
-    'User-Agent': 'ntfy/worker',
-    'X-Poll-ID': message.id,
+    "User-Agent": "ntfy/worker",
+    "X-Poll-ID": message.id,
   };
 
   if (env.NTFY_UPSTREAM_ACCESS_TOKEN) {
-    headers['Authorization'] = `Bearer ${env.NTFY_UPSTREAM_ACCESS_TOKEN}`;
+    headers["Authorization"] = `Bearer ${env.NTFY_UPSTREAM_ACCESS_TOKEN}`;
   }
 
   try {
     // Original ntfy sends empty body for poll requests
     const response = await fetch(upstreamUrl, {
-      method: 'POST',
+      method: "POST",
       headers,
-      body: '',
+      body: "",
     });
 
     if (!response.ok) {
-      console.error(`Upstream poll request failed: ${response.status} ${response.statusText}`);
+      console.error(
+        `Upstream poll request failed: ${response.status} ${response.statusText}`,
+      );
     }
   } catch (err) {
-    console.error('Failed to forward poll request to upstream:', err);
+    console.error("Failed to forward poll request to upstream:", err);
   }
 }
 
@@ -55,7 +60,7 @@ export async function forwardPollRequest(env: Env, message: Message): Promise<vo
  */
 async function sha256(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
