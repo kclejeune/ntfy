@@ -36,4 +36,9 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string; // Base64url-encoded ECDSA P-256 public key
   VAPID_PRIVATE_KEY?: string; // Base64url-encoded ECDSA P-256 private key
   VAPID_SUBJECT?: string; // mailto: or https:// contact URL
+
+  // Email publishing configuration (matches ntfy server naming)
+  NTFY_SMTP_SERVER_DOMAIN?: string; // Domain for email-to-topic (e.g., "ntfy.yourdomain.com")
+  NTFY_SMTP_SERVER_ADDR_PREFIX?: string; // Optional: prefix for email addresses (e.g., "ntfy-" for ntfy-topic@domain.com)
+  NTFY_EMAIL_ARCHIVE_ADDRESS?: string; // Optional: forward processed emails to this address
 }

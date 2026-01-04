@@ -40,6 +40,13 @@ import {
 } from "./handlers/webpush";
 import { extractAuth } from "./auth/middleware";
 import { checkTopicAccess, type AccessCheckResult } from "./auth/access";
+import { handleEmail } from "./email";
+import {
+  handleUnifiedPushQuery,
+  handleUnifiedPushDiscovery,
+  handleUnifiedPushRegister,
+} from "./handlers/unifiedpush";
+import { publishMessageInternal } from "./handlers/publish";
 
 // Helper to return access denied response
 function accessDeniedResponse(access: AccessCheckResult): Response {
@@ -326,6 +333,57 @@ app.patch("/v1/webpush", handleSubscriptionUpdate);
 // DELETE /v1/webpush - Unregister push subscription
 app.delete("/v1/webpush", handleSubscriptionDelete);
 
+// ==================== UnifiedPush endpoints ====================
+
+// GET /.well-known/unifiedpush - Discovery endpoint
+app.get("/.well-known/unifiedpush", handleUnifiedPushDiscovery);
+
+// POST /v1/unifiedpush/register - Generate endpoint URL for app
+app.post("/v1/unifiedpush/register", handleUnifiedPushRegister);
+
+// POST /UP{base64url(topic)} - UnifiedPush message delivery
+// Using wildcard pattern since Hono doesn't support /UP:topic without separator
+app.post("/:encodedPath", async (c, next) => {
+  const path = c.req.param("encodedPath");
+  if (path.startsWith("UP") && path.length > 2) {
+    // Extract the base64-encoded topic part
+    const encodedTopic = path.slice(2);
+    // Decode base64url to get actual topic
+    let topic: string;
+    try {
+      const base64 = encodedTopic.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      topic = atob(padded);
+    } catch {
+      return c.text("Invalid topic encoding", 400);
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(topic)) {
+      return c.text("Invalid topic", 400);
+    }
+
+    // Get raw body
+    const body = await c.req.text();
+
+    try {
+      await publishMessageInternal(c.env, {
+        topic,
+        message: body,
+        tags: ["unifiedpush"],
+        sender:
+          c.req.header("CF-Connecting-IP") ||
+          c.req.header("X-Forwarded-For")?.split(",")[0] ||
+          "",
+      });
+      return c.text("", 200);
+    } catch (err) {
+      console.error("Failed to publish UnifiedPush message:", err);
+      return c.text("Internal error", 500);
+    }
+  }
+  return next();
+});
+
 // ==================== Publish endpoints ====================
 
 // POST/PUT / - Publish message with topic in JSON body (used by web UI)
@@ -370,6 +428,12 @@ app.put("/", async (c) => {
 // POST/PUT /{topic} - Publish message
 app.post("/:topic", async (c) => {
   const topic = c.req.param("topic");
+
+  // Check for UnifiedPush ?up=1 query parameter
+  const isUnifiedPush = c.req.query("up") === "1";
+  if (isUnifiedPush && isValidTopic(topic)) {
+    return handleUnifiedPushQuery(c, topic);
+  }
 
   if (!isValidTopic(topic) || RESERVED_PATHS.has(topic)) {
     return c.json({ error: "Invalid topic" }, 400);
@@ -568,6 +632,10 @@ app.get("/:topic/auth", async (c) => {
 // Export the app
 export default {
   fetch: app.fetch,
+
+  // Email handler for email-to-topic publishing
+  // Configure Email Routing in Cloudflare Dashboard to forward to this worker
+  email: handleEmail,
 
   // Scheduled handler for cleanup (runs every hour)
   async scheduled(

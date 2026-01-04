@@ -167,7 +167,10 @@ export async function handleSubscriptionDelete(
   }
 
   if (!body.endpoint) {
-    return c.json({ code: 40001, error: "Missing required field: endpoint" }, 400);
+    return c.json(
+      { code: 40001, error: "Missing required field: endpoint" },
+      400,
+    );
   }
 
   try {

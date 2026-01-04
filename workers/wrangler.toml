@@ -57,6 +57,11 @@ NTFY_ATTACHMENT_FILE_SIZE_LIMIT = "15728640"    # 15MB per file
 NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT = "1073741824" # 1GB total
 NTFY_ATTACHMENT_EXPIRY_DURATION = "10800"       # 3 hours default
 VAPID_SUBJECT = "mailto:admin@kclj.io"
+# Email publishing configuration (matches ntfy server naming)
+# Configure Email Routing in Cloudflare Dashboard to forward to this worker
+NTFY_SMTP_SERVER_DOMAIN = "ntfy.kclj.io"
+NTFY_SMTP_SERVER_ADDR_PREFIX = "ntfy-"  # Optional: require prefix (e.g., ntfy-topic@domain.com)
+# NTFY_EMAIL_ARCHIVE_ADDRESS = ""  # Optional: forward processed emails here
 
 # Development settings
 [dev]

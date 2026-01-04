@@ -89,9 +89,7 @@ async function hkdf(
     false,
     ["sign"],
   );
-  const prk = new Uint8Array(
-    await crypto.subtle.sign("HMAC", extractKey, ikm),
-  );
+  const prk = new Uint8Array(await crypto.subtle.sign("HMAC", extractKey, ikm));
 
   // Expand
   const expandKey = await crypto.subtle.importKey(
@@ -166,7 +164,10 @@ async function encryptPayload(
 
   // Export server public key in uncompressed format
   const serverPublicKeyRaw = new Uint8Array(
-    (await crypto.subtle.exportKey("raw", serverKeyPair.publicKey)) as ArrayBuffer,
+    (await crypto.subtle.exportKey(
+      "raw",
+      serverKeyPair.publicKey,
+    )) as ArrayBuffer,
   );
 
   // Import client public key
@@ -302,7 +303,9 @@ async function createVapidHeaders(
     throw new Error("VAPID keys not configured");
   }
 
-  const subject = env.VAPID_SUBJECT || `mailto:admin@${new URL(env.NTFY_BASE_URL || "https://ntfy.sh").hostname}`;
+  const subject =
+    env.VAPID_SUBJECT ||
+    `mailto:admin@${new URL(env.NTFY_BASE_URL || "https://ntfy.sh").hostname}`;
   const expiration = Math.floor(Date.now() / 1000) + 12 * 60 * 60; // 12 hours
 
   const jwt = await createVapidJwt(
@@ -490,7 +493,12 @@ export async function broadcastWebPush(
     const results = await Promise.allSettled(
       batch.map(async (sub) => {
         const result = await sendWebPush(env, sub, message);
-        await updateSubscriptionStatus(env.DB, sub.id, result.success, result.status);
+        await updateSubscriptionStatus(
+          env.DB,
+          sub.id,
+          result.success,
+          result.status,
+        );
         return result;
       }),
     );

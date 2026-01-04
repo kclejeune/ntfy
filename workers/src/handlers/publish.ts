@@ -24,7 +24,7 @@ import {
 import { broadcastWebPush } from "../push/webpush";
 
 // Parse priority from string (matches Go implementation)
-function parsePriority(s: string): number {
+export function parsePriority(s: string): number {
   const lower = s.toLowerCase();
   switch (lower) {
     case "max":
@@ -488,4 +488,97 @@ export async function handlePublish(
 
   // Return the message
   return c.json(externalMsg);
+}
+
+/**
+ * Internal publish request for programmatic use (email, scheduled, etc.)
+ */
+export interface InternalPublishRequest {
+  topic: string;
+  title?: string;
+  message?: string;
+  priority?: number;
+  tags?: string[];
+  sender?: string;
+  click?: string;
+  icon?: string;
+}
+
+/**
+ * Publish a message internally (for email, scheduled, etc.)
+ * Bypasses HTTP request parsing.
+ */
+export async function publishMessageInternal(
+  env: {
+    DB: D1Database;
+    TOPIC_DO: DurableObjectNamespace;
+    NTFY_CACHE_DURATION?: string;
+    NTFY_BASE_URL?: string;
+    NTFY_UPSTREAM_BASE_URL?: string;
+    NTFY_UPSTREAM_ACCESS_TOKEN?: string;
+    VAPID_PUBLIC_KEY?: string;
+    VAPID_PRIVATE_KEY?: string;
+    VAPID_SUBJECT?: string;
+  },
+  request: InternalPublishRequest,
+): Promise<Message> {
+  const now = Math.floor(Date.now() / 1000);
+  const defaultExpiry = parseInt(env.NTFY_CACHE_DURATION || "43200", 10);
+  const expires = now + defaultExpiry;
+
+  const msg: InternalMessage = {
+    id: generateMessageId(),
+    time: now,
+    expires,
+    event: EVENT_MESSAGE,
+    topic: request.topic,
+    title: request.title,
+    message: request.message,
+    priority: request.priority,
+    tags: request.tags,
+    click: request.click,
+    icon: request.icon,
+    sender: request.sender || "internal",
+  };
+
+  // Store in database
+  await insertMessage(env.DB, msg, expires);
+
+  // Broadcast to subscribers via Durable Object
+  const doId = env.TOPIC_DO.idFromName(request.topic);
+  const stub = env.TOPIC_DO.get(doId);
+
+  const externalMsg: Message = {
+    id: msg.id,
+    time: msg.time,
+    expires,
+    event: msg.event,
+    topic: msg.topic,
+  };
+
+  if (msg.title) externalMsg.title = msg.title;
+  if (msg.message) externalMsg.message = msg.message;
+  if (msg.priority && msg.priority !== PRIORITY_DEFAULT)
+    externalMsg.priority = msg.priority;
+  if (msg.tags && msg.tags.length > 0) externalMsg.tags = msg.tags;
+  if (msg.click) externalMsg.click = msg.click;
+  if (msg.icon) externalMsg.icon = msg.icon;
+
+  await stub.fetch(`https://internal/topic/${request.topic}/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(externalMsg),
+  });
+
+  // Forward to upstream for iOS push (non-blocking)
+  forwardPollRequest(env, externalMsg).catch((err) =>
+    console.error("Failed to forward poll request:", err),
+  );
+
+  // Send Web Push notifications (non-blocking)
+  broadcastWebPush(env, externalMsg).catch((err) =>
+    console.error("Failed to broadcast web push:", err),
+  );
+
+  return externalMsg;
 }
