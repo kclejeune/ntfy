@@ -18,9 +18,12 @@ import {
   handleAccountSubscriptionAdd,
   handleAccountSubscriptionList,
   handleAccountSubscriptionDelete,
+  handleAccountSubscriptionUpdate,
   handleAccountReservationAdd,
   handleAccountReservationList,
   handleAccountReservationDelete,
+  handleAccountSettingsUpdate,
+  handleTiersList,
 } from './handlers/account';
 import { extractAuth } from './auth/middleware';
 import { checkTopicAccess, type AccessCheckResult } from './auth/access';
@@ -224,6 +227,15 @@ app.get('/v1/account/subscription', handleAccountSubscriptionList);
 
 // DELETE /v1/account/subscription - Delete subscription
 app.delete('/v1/account/subscription', handleAccountSubscriptionDelete);
+
+// PATCH /v1/account/subscription - Update subscription display name
+app.patch('/v1/account/subscription', handleAccountSubscriptionUpdate);
+
+// PATCH /v1/account/settings - Update user settings
+app.patch('/v1/account/settings', handleAccountSettingsUpdate);
+
+// GET /v1/tiers - Get available tiers
+app.get('/v1/tiers', handleTiersList);
 
 // ==================== Reservation endpoints ====================
 

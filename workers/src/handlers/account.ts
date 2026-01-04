@@ -91,6 +91,17 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
   // Get user's tokens
   const tokens = await getUserTokens(c.env.DB, auth.user.id);
 
+  // Get user's settings
+  const settingsRow = await c.env.DB.prepare('SELECT settings FROM users WHERE id = ?')
+    .bind(auth.user.id)
+    .first<{ settings: string }>();
+  let settings: { notification?: { sound?: string; min_priority?: number; delete_after?: number }; language?: string } = {};
+  try {
+    settings = JSON.parse(settingsRow?.settings || '{}');
+  } catch {
+    // Ignore parse errors
+  }
+
   // Get user's subscriptions
   const subscriptionsResult = await c.env.DB.prepare(
     'SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?'
@@ -140,6 +151,8 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
     })),
     subscriptions,
     reservations,
+    language: settings.language,
+    notification: settings.notification,
   });
 }
 
@@ -576,4 +589,112 @@ export async function handleAccountReservationDelete(c: Context<AppContext>, top
   publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({ success: true });
+}
+
+// ==================== Settings endpoints ====================
+
+interface UserSettings {
+  notification?: {
+    sound?: string;
+    min_priority?: number;
+    delete_after?: number;
+  };
+  language?: string;
+}
+
+// PATCH /v1/account/settings - Update user settings
+export async function handleAccountSettingsUpdate(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  let body: UserSettings;
+  try {
+    body = (await c.req.json()) as UserSettings;
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  // Get current settings
+  const row = await c.env.DB.prepare('SELECT settings FROM users WHERE id = ?')
+    .bind(auth.user.id)
+    .first<{ settings: string }>();
+
+  let currentSettings: UserSettings = {};
+  try {
+    currentSettings = JSON.parse(row?.settings || '{}');
+  } catch {
+    // Ignore parse errors, start fresh
+  }
+
+  // Merge settings
+  const newSettings: UserSettings = {
+    ...currentSettings,
+    ...body,
+    notification: {
+      ...currentSettings.notification,
+      ...body.notification,
+    },
+  };
+
+  // Update in database
+  await c.env.DB.prepare('UPDATE users SET settings = ? WHERE id = ?')
+    .bind(JSON.stringify(newSettings), auth.user.id)
+    .run();
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
+
+  return c.json(newSettings);
+}
+
+// ==================== Subscription update endpoint ====================
+
+// PATCH /v1/account/subscription - Update subscription display name
+export async function handleAccountSubscriptionUpdate(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  let body: { base_url: string; topic: string; display_name?: string };
+  try {
+    body = (await c.req.json()) as { base_url: string; topic: string; display_name?: string };
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body.base_url || !body.topic) {
+    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+  }
+
+  const result = await c.env.DB.prepare(
+    'UPDATE subscriptions SET display_name = ? WHERE user_id = ? AND base_url = ? AND topic = ?'
+  )
+    .bind(body.display_name || '', auth.user.id, body.base_url, body.topic)
+    .run();
+
+  if ((result.meta.changes || 0) === 0) {
+    return c.json({ code: 40401, error: 'Subscription not found' }, 404);
+  }
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
+
+  return c.json({
+    base_url: body.base_url,
+    topic: body.topic,
+    display_name: body.display_name || '',
+  });
+}
+
+// ==================== Tiers endpoint ====================
+
+// GET /v1/tiers - Get available tiers (returns empty for self-hosted)
+export async function handleTiersList(c: Context<AppContext>): Promise<Response> {
+  // For self-hosted instances without billing, return empty array
+  return c.json([]);
 }
