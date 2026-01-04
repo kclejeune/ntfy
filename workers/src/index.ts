@@ -5,6 +5,7 @@ import type { AuthContext } from './types/user';
 import { handlePublish } from './handlers/publish';
 import { handleSubscribeWS, handleSubscribeSSE, handleSubscribeJSON } from './handlers/subscribe';
 import { deleteExpiredMessages } from './database/messages';
+import { deleteExpiredTokens } from './database/users';
 import {
   handleAccountCreate,
   handleAccountGet,
@@ -190,7 +191,16 @@ app.post('/v1/account/token', handleAccountTokenCreate);
 // PATCH /v1/account/token - Update token (rename)
 app.patch('/v1/account/token', handleAccountTokenUpdate);
 
-// DELETE /v1/account/token/:token - Delete token
+// DELETE /v1/account/token - Delete token (via X-Token header)
+app.delete('/v1/account/token', async (c) => {
+  const tokenId = c.req.header('X-Token');
+  if (!tokenId) {
+    return c.json({ code: 40001, error: 'X-Token header required' }, 400);
+  }
+  return handleAccountTokenDelete(c, tokenId);
+});
+
+// DELETE /v1/account/token/:token - Delete token (via URL param)
 app.delete('/v1/account/token/:token', async (c) => {
   return handleAccountTokenDelete(c, c.req.param('token'));
 });
@@ -471,12 +481,15 @@ app.get('/:topic/auth', async (c) => {
 export default {
   fetch: app.fetch,
 
-  // Scheduled handler for message cleanup (runs every hour)
+  // Scheduled handler for cleanup (runs every hour)
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {
-        const deleted = await deleteExpiredMessages(env.DB);
-        console.log(`Cleaned up ${deleted} expired messages`);
+        const deletedMessages = await deleteExpiredMessages(env.DB);
+        console.log(`Cleaned up ${deletedMessages} expired messages`);
+
+        const deletedTokens = await deleteExpiredTokens(env.DB);
+        console.log(`Cleaned up ${deletedTokens} expired tokens`);
       })()
     );
   },

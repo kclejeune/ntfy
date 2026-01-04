@@ -7,6 +7,9 @@ import { createUserToken } from '../auth/jwt';
 import { extractAuth } from '../auth/middleware';
 import { publishSyncEventAsync } from '../sync/notify';
 
+// Token expiry duration in seconds (72 hours, matches original ntfy)
+const TOKEN_EXPIRY_SECONDS = 72 * 60 * 60;
+
 // POST /v1/account - Create account
 export async function handleAccountCreate(c: Context<AppContext>): Promise<Response> {
   const body = (await c.req.json()) as AccountCreateRequest;
@@ -31,8 +34,8 @@ export async function handleAccountCreate(c: Context<AppContext>): Promise<Respo
   // Create the user
   const user = await createUser(c.env.DB, body.username, body.password);
 
-  // Create an initial token
-  const token = await createToken(c.env.DB, user.id, 'default');
+  // Create an initial token with 72-hour expiry
+  const token = await createToken(c.env.DB, user.id, 'default', TOKEN_EXPIRY_SECONDS);
 
   return c.json({
     username: user.username,
@@ -150,7 +153,9 @@ export async function handleAccountTokenCreate(c: Context<AppContext>): Promise<
 
   const body = (await c.req.json().catch(() => ({}))) as AccountTokenIssueRequest;
 
-  const token = await createToken(c.env.DB, auth.user.id, body.label || '', body.expires || 0);
+  // Use provided expiry or default to 72 hours
+  const expiresIn = body.expires || TOKEN_EXPIRY_SECONDS;
+  const token = await createToken(c.env.DB, auth.user.id, body.label || '', expiresIn);
 
   // Notify other clients
   publishSyncEventAsync(c.executionCtx, c.env, auth.user);
@@ -183,8 +188,8 @@ export async function handleAccountTokenDelete(c: Context<AppContext>, tokenId: 
   return c.json({ success: true });
 }
 
-// PATCH /v1/account/token - Update a token (rename)
-// If no body is provided, updates the token used for authentication
+// PATCH /v1/account/token - Update a token (rename/extend)
+// If no body is provided, extends the token used for authentication by 72 hours
 // If body contains {token, label, expires}, updates that specific token
 export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<Response> {
   const auth = await extractAuth(c);
@@ -212,7 +217,11 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
   // If no token in body, use the token from auth (update current token)
   const tokenId = body.token || auth.token.id;
 
-  const updated = await updateTokenLabel(c.env.DB, tokenId, auth.user.id, body.label ?? auth.token.label, body.expires);
+  // If no expires provided, extend by 72 hours from now (matches original ntfy behavior)
+  const now = Math.floor(Date.now() / 1000);
+  const expires = body.expires !== undefined ? body.expires : now + TOKEN_EXPIRY_SECONDS;
+
+  const updated = await updateTokenLabel(c.env.DB, tokenId, auth.user.id, body.label ?? auth.token.label, expires);
 
   if (!updated) {
     return c.json({ code: 40401, error: 'Token not found' }, 404);

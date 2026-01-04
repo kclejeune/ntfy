@@ -141,6 +141,14 @@ export async function deleteToken(db: D1Database, tokenId: string, userId: strin
   return (result.meta.changes || 0) > 0;
 }
 
+// Delete expired tokens (called by scheduled cleanup)
+export async function deleteExpiredTokens(db: D1Database): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  // Delete tokens where expires > 0 (has expiry set) AND expires < now (expired)
+  const result = await db.prepare('DELETE FROM tokens WHERE expires > 0 AND expires < ?').bind(now).run();
+  return result.meta.changes || 0;
+}
+
 // Update a token's label and/or expires
 export async function updateTokenLabel(db: D1Database, tokenId: string, userId: string, label: string, expires?: number): Promise<Token | null> {
   let result;
