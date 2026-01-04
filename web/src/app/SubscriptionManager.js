@@ -93,7 +93,7 @@ class SubscriptionManager {
   async syncFromRemote(remoteSubscriptions, remoteReservations) {
     console.log(`[SubscriptionManager] Syncing subscriptions from remote`, remoteSubscriptions);
 
-    // Add remote subscriptions
+    // Add remote subscriptions and update reservations for existing ones
     const remoteIds = await Promise.all(
       remoteSubscriptions.map(async (remote) => {
         const reservation = remoteReservations?.find((r) => remote.base_url === config.base_url && remote.topic === r.topic) || null;
@@ -102,6 +102,9 @@ class SubscriptionManager {
           displayName: remote.display_name, // May be undefined
           reservation, // May be null!
         });
+
+        // Always update reservation for existing subscriptions (add() returns early if exists)
+        await this.setReservation(local.id, reservation);
 
         return local.id;
       })
