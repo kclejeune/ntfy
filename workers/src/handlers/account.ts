@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import type { AppContext } from '../router';
 import type { AccountCreateRequest, AccountTokenIssueRequest, AccountResponse, AccountTokenResponse } from '../types/user';
-import { createUser, getUserByUsername, getUserById, getUserPasswordHash, usernameExists, createToken, getUserTokens, deleteToken, updateUserPassword } from '../database/users';
+import { createUser, getUserByUsername, getUserById, getUserPasswordHash, usernameExists, createToken, getUserTokens, deleteToken, updateTokenLabel, updateUserPassword } from '../database/users';
 import { validateUsername, validatePassword, verifyPassword } from '../auth/password';
 import { createUserToken } from '../auth/jwt';
 import { extractAuth } from '../auth/middleware';
@@ -48,6 +48,34 @@ export async function handleAccountCreate(c: Context<AppContext>): Promise<Respo
   } as AccountResponse);
 }
 
+// Default limits for free tier
+const DEFAULT_LIMITS = {
+  basis: 'tier',
+  messages: 0, // unlimited
+  messages_expiry_duration: 43200, // 12 hours
+  emails: 0,
+  calls: 0,
+  reservations: 3,
+  attachment_total_size: 0,
+  attachment_file_size: 0,
+  attachment_expiry_duration: 0,
+  attachment_bandwidth: 0,
+};
+
+// Default stats
+const DEFAULT_STATS = {
+  messages: 0,
+  messages_remaining: 0,
+  emails: 0,
+  emails_remaining: 0,
+  calls: 0,
+  calls_remaining: 0,
+  reservations: 0,
+  reservations_remaining: 3,
+  attachment_total_size: 0,
+  attachment_total_size_remaining: 0,
+};
+
 // GET /v1/account - Get account info
 export async function handleAccountGet(c: Context<AppContext>): Promise<Response> {
   const auth = await extractAuth(c);
@@ -59,6 +87,10 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
   // Get user's tokens
   const tokens = await getUserTokens(c.env.DB, auth.user.id);
 
+  // Get user's reservations count
+  const reservationsResult = await c.env.DB.prepare('SELECT COUNT(*) as count FROM reservations WHERE user_id = ?').bind(auth.user.id).first<{ count: number }>();
+  const reservationsCount = reservationsResult?.count ?? 0;
+
   return c.json({
     username: auth.user.username,
     role: auth.user.role,
@@ -66,6 +98,12 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
     tier: {
       code: auth.user.tier,
       name: auth.user.tier === 'default' ? 'Free' : auth.user.tier,
+    },
+    limits: DEFAULT_LIMITS,
+    stats: {
+      ...DEFAULT_STATS,
+      reservations: reservationsCount,
+      reservations_remaining: DEFAULT_LIMITS.reservations - reservationsCount,
     },
     tokens: tokens.map((t) => ({
       token: t.id,
@@ -112,6 +150,49 @@ export async function handleAccountTokenDelete(c: Context<AppContext>, tokenId: 
   }
 
   return c.json({ success: true });
+}
+
+// PATCH /v1/account/token - Update a token (rename)
+// If no body is provided, updates the token used for authentication
+// If body contains {token, label, expires}, updates that specific token
+export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  // Must be authenticated with a token (not basic auth)
+  if (!auth.token) {
+    return c.json({ code: 40001, error: 'Bearer token authentication required' }, 400);
+  }
+
+  // Try to parse body, default to empty object
+  let body: { token?: string; label?: string; expires?: number } = {};
+  try {
+    const text = await c.req.text();
+    if (text && text.trim()) {
+      body = JSON.parse(text);
+    }
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  // If no token in body, use the token from auth (update current token)
+  const tokenId = body.token || auth.token.id;
+
+  const updated = await updateTokenLabel(c.env.DB, tokenId, auth.user.id, body.label ?? auth.token.label, body.expires);
+
+  if (!updated) {
+    return c.json({ code: 40401, error: 'Token not found' }, 404);
+  }
+
+  return c.json({
+    token: updated.id,
+    label: updated.label,
+    last_access: updated.last_access,
+    expires: updated.expires,
+  } as AccountTokenResponse);
 }
 
 // POST /v1/account/password - Change password
@@ -183,5 +264,243 @@ export async function handleAuth(c: Context<AppContext>): Promise<Response> {
   }
 
   // Return success if already authenticated
+  return c.json({ success: true });
+}
+
+// ==================== Subscription endpoints ====================
+
+interface SubscriptionRequest {
+  base_url: string;
+  topic: string;
+  display_name?: string;
+}
+
+// POST /v1/account/subscription - Add subscription (sync across devices)
+export async function handleAccountSubscriptionAdd(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  let body: SubscriptionRequest;
+  try {
+    body = (await c.req.json()) as SubscriptionRequest;
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body.base_url || !body.topic) {
+    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+  }
+
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO subscriptions (user_id, base_url, topic, display_name) VALUES (?, ?, ?, ?)'
+    )
+      .bind(auth.user.id, body.base_url, body.topic, body.display_name || '')
+      .run();
+  } catch (e: unknown) {
+    // Check for unique constraint violation
+    if (e instanceof Error && e.message.includes('UNIQUE')) {
+      return c.json({ code: 40901, error: 'Subscription already exists' }, 409);
+    }
+    throw e;
+  }
+
+  return c.json({
+    base_url: body.base_url,
+    topic: body.topic,
+    display_name: body.display_name || '',
+  });
+}
+
+// GET /v1/account/subscription - Get all subscriptions
+export async function handleAccountSubscriptionList(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  const result = await c.env.DB.prepare(
+    'SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?'
+  )
+    .bind(auth.user.id)
+    .all<{ base_url: string; topic: string; display_name: string }>();
+
+  return c.json(result.results || []);
+}
+
+// DELETE /v1/account/subscription - Delete subscription
+export async function handleAccountSubscriptionDelete(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  let body: { base_url: string; topic: string };
+  try {
+    body = (await c.req.json()) as { base_url: string; topic: string };
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body.base_url || !body.topic) {
+    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+  }
+
+  const result = await c.env.DB.prepare(
+    'DELETE FROM subscriptions WHERE user_id = ? AND base_url = ? AND topic = ?'
+  )
+    .bind(auth.user.id, body.base_url, body.topic)
+    .run();
+
+  if ((result.meta.changes || 0) === 0) {
+    return c.json({ code: 40401, error: 'Subscription not found' }, 404);
+  }
+
+  return c.json({ success: true });
+}
+
+// ==================== Reservation endpoints ====================
+
+interface ReservationRequest {
+  topic: string;
+  everyone?: string; // "read-write", "read-only", "write-only", "deny-all"
+}
+
+// POST /v1/account/reservation - Reserve a topic
+export async function handleAccountReservationAdd(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  let body: ReservationRequest;
+  try {
+    body = (await c.req.json()) as ReservationRequest;
+  } catch {
+    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body.topic) {
+    return c.json({ code: 40001, error: 'topic is required' }, 400);
+  }
+
+  // Validate topic format
+  if (!/^[-_A-Za-z0-9]{1,64}$/.test(body.topic)) {
+    return c.json({ code: 40001, error: 'Invalid topic format' }, 400);
+  }
+
+  // Parse permissions
+  let everyoneRead = 0;
+  let everyoneWrite = 0;
+  switch (body.everyone) {
+    case 'read-write':
+      everyoneRead = 1;
+      everyoneWrite = 1;
+      break;
+    case 'read-only':
+      everyoneRead = 1;
+      break;
+    case 'write-only':
+      everyoneWrite = 1;
+      break;
+    case 'deny-all':
+    default:
+      // Both stay 0
+      break;
+  }
+
+  // Check if already reserved
+  const existing = await c.env.DB.prepare('SELECT user_id FROM reservations WHERE topic = ?')
+    .bind(body.topic)
+    .first<{ user_id: string }>();
+
+  if (existing) {
+    if (existing.user_id === auth.user.id) {
+      // Update existing reservation
+      await c.env.DB.prepare(
+        'UPDATE reservations SET everyone_read = ?, everyone_write = ? WHERE topic = ?'
+      )
+        .bind(everyoneRead, everyoneWrite, body.topic)
+        .run();
+    } else {
+      return c.json({ code: 40901, error: 'Topic already reserved by another user' }, 409);
+    }
+  } else {
+    // Create new reservation
+    await c.env.DB.prepare(
+      'INSERT INTO reservations (topic, user_id, everyone_read, everyone_write) VALUES (?, ?, ?, ?)'
+    )
+      .bind(body.topic, auth.user.id, everyoneRead, everyoneWrite)
+      .run();
+
+    // Grant owner full access
+    await c.env.DB.prepare(
+      'INSERT OR REPLACE INTO user_access (user_id, topic, read, write, owner_user_id) VALUES (?, ?, 1, 1, ?)'
+    )
+      .bind(auth.user.id, body.topic, auth.user.id)
+      .run();
+  }
+
+  return c.json({
+    topic: body.topic,
+    everyone: body.everyone || 'deny-all',
+  });
+}
+
+// GET /v1/account/reservation - Get all reservations
+export async function handleAccountReservationList(c: Context<AppContext>): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  const result = await c.env.DB.prepare(
+    'SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?'
+  )
+    .bind(auth.user.id)
+    .all<{ topic: string; everyone_read: number; everyone_write: number }>();
+
+  const reservations = (result.results || []).map((r) => {
+    let everyone = 'deny-all';
+    if (r.everyone_read && r.everyone_write) everyone = 'read-write';
+    else if (r.everyone_read) everyone = 'read-only';
+    else if (r.everyone_write) everyone = 'write-only';
+
+    return { topic: r.topic, everyone };
+  });
+
+  return c.json(reservations);
+}
+
+// DELETE /v1/account/reservation/:topic - Delete reservation
+export async function handleAccountReservationDelete(c: Context<AppContext>, topic: string): Promise<Response> {
+  const auth = await extractAuth(c);
+
+  if (auth.anonymous || !auth.user) {
+    return c.json({ code: 40101, error: 'Unauthorized' }, 401);
+  }
+
+  const result = await c.env.DB.prepare(
+    'DELETE FROM reservations WHERE topic = ? AND user_id = ?'
+  )
+    .bind(topic, auth.user.id)
+    .run();
+
+  if ((result.meta.changes || 0) === 0) {
+    return c.json({ code: 40401, error: 'Reservation not found' }, 404);
+  }
+
+  // Also remove owner access
+  await c.env.DB.prepare('DELETE FROM user_access WHERE topic = ? AND owner_user_id = ?')
+    .bind(topic, auth.user.id)
+    .run();
+
   return c.json({ success: true });
 }

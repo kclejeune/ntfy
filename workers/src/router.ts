@@ -1,9 +1,10 @@
 import type { Env } from './types/env';
 import type { AuthContext } from './types/user';
 
-// Extended context with auth
+// Extended context with auth and optional parsed body
 export type Variables = {
   auth: AuthContext;
+  parsedBody?: Record<string, unknown>;
 };
 
 export type AppContext = {

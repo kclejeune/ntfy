@@ -3,6 +3,7 @@ import type { AppContext } from '../router';
 import type { Message, InternalMessage, PublishRequest, Action } from '../types/message';
 import { generateMessageId, PRIORITY_DEFAULT, PRIORITY_MIN, PRIORITY_MAX, EVENT_MESSAGE } from '../types/message';
 import { insertMessage } from '../database/messages';
+import { forwardPollRequest } from '../push/upstream';
 
 // Parse priority from string (matches Go implementation)
 function parsePriority(s: string): number {
@@ -48,7 +49,10 @@ async function parseMessage(c: Context<AppContext>, topic: string): Promise<Inte
   // Parse from JSON body if applicable
   if (contentType.includes('application/json')) {
     try {
-      const body = (await c.req.json()) as PublishRequest;
+      // Check if body was already parsed and stored in context (for POST/PUT to /)
+      const cachedBody = c.get('parsedBody') as PublishRequest | undefined;
+      const body = cachedBody || ((await c.req.json()) as PublishRequest);
+
       if (body.topic) msg.topic = body.topic;
       if (body.message) msg.message = body.message;
       if (body.title) msg.title = body.title;
@@ -139,7 +143,7 @@ export async function handlePublish(c: Context<AppContext>, topic: string): Prom
   const msg = await parseMessage(c, topic);
 
   // Calculate expiry time
-  const defaultExpiry = parseInt(c.env.DEFAULT_MESSAGE_EXPIRY || '43200', 10);
+  const defaultExpiry = parseInt(c.env.NTFY_CACHE_DURATION || '43200', 10);
   const expires = msg.time + defaultExpiry;
   msg.expires = expires;
 
@@ -157,6 +161,9 @@ export async function handlePublish(c: Context<AppContext>, topic: string): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(externalMsg),
   });
+
+  // Forward poll request to upstream for iOS push notifications (non-blocking)
+  c.executionCtx.waitUntil(forwardPollRequest(c.env, externalMsg));
 
   // Return the message
   return c.json(externalMsg);

@@ -80,6 +80,19 @@ CREATE TABLE IF NOT EXISTS reservations (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- User subscriptions (synced across devices)
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    UNIQUE(user_id, base_url, topic),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+
 -- Stats table
 CREATE TABLE IF NOT EXISTS stats (
     key TEXT PRIMARY KEY,

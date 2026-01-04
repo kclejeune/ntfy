@@ -2,7 +2,7 @@ import type { Context } from 'hono';
 import type { AppContext } from '../router';
 import type { Message } from '../types/message';
 import { createOpenMessage, createKeepaliveMessage } from '../types/message';
-import { getMessagesSince, getMessagesSinceId, getLatestMessages } from '../database/messages';
+import { getMessagesSince, getMessagesSinceId, getLatestMessages, getMessageById } from '../database/messages';
 
 // Parse 'since' parameter
 interface SinceMarker {
@@ -102,31 +102,51 @@ export async function handleSubscribeSSE(c: Context<AppContext>, topic: string):
           return;
         }
 
-        // For streaming, connect to Durable Object for real-time updates
-        // Note: This is a simplified implementation. In production, you'd want
-        // to use the Durable Object's SSE endpoint directly.
+        // For streaming, connect to Durable Object via WebSocket for real-time updates
         const doId = c.env.TOPIC_DO.idFromName(topic);
         const stub = c.env.TOPIC_DO.get(doId);
 
-        // Forward to DO SSE endpoint
-        const response = await stub.fetch(`https://internal/topic/${topic}/sse${url.search}`);
+        // Use WebSocket internally to get updates
+        const wsResponse = await stub.fetch(`https://internal/topic/${topic}/ws${url.search}`, {
+          headers: { Upgrade: 'websocket' },
+        });
 
-        if (response.body) {
-          const reader = response.body.getReader();
+        const ws = wsResponse.webSocket;
+        if (ws) {
+          ws.accept();
+
+          // Keep connection alive and forward messages
+          // eslint-disable-next-line no-constant-condition
           while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            await writer.write(value);
+            const event = await new Promise<MessageEvent | CloseEvent>((resolve) => {
+              ws.addEventListener('message', resolve as EventListener, { once: true });
+              ws.addEventListener('close', resolve as EventListener, { once: true });
+              ws.addEventListener('error', resolve as EventListener, { once: true });
+            });
+
+            if (event.type === 'close' || event.type === 'error') {
+              break;
+            }
+
+            if (event.type === 'message') {
+              try {
+                await writer.write(encoder.encode(`data: ${(event as MessageEvent).data}\n\n`));
+              } catch {
+                ws.close();
+                break;
+              }
+            }
           }
         }
       } catch (e) {
         // Connection closed
-      } finally {
-        try {
-          await writer.close();
-        } catch {
-          // Already closed
-        }
+      }
+
+      // Only close writer when WebSocket closes
+      try {
+        await writer.close();
+      } catch {
+        // Already closed
       }
     })()
   );
@@ -146,6 +166,17 @@ export async function handleSubscribeJSON(c: Context<AppContext>, topic: string)
   const url = new URL(c.req.url);
   const since = parseSince(url.searchParams.get('since'));
   const poll = url.searchParams.get('poll') === '1';
+  const pollId = url.searchParams.get('id');
+
+  // If polling for specific message ID (used by iOS app after receiving push)
+  // iOS app expects a single Message object, not an array
+  if (poll && pollId) {
+    const message = await getMessageById(c.env.DB, pollId);
+    if (message && message.topic === topic) {
+      return c.json(message);
+    }
+    return c.json({ error: 'Message not found' }, 404);
+  }
 
   // Get historical messages
   let messages: Message[] = [];

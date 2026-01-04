@@ -16,16 +16,14 @@ interface SessionInfo {
 export class TopicDO implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
-  private sessions: Map<WebSocket, SessionInfo>;
   private topic: string;
   private keepaliveInterval: number;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.sessions = new Map();
     this.topic = '';
-    this.keepaliveInterval = parseInt(env.KEEPALIVE_INTERVAL || '45', 10) * 1000;
+    this.keepaliveInterval = parseInt(env.NTFY_KEEPALIVE_INTERVAL || '45', 10) * 1000;
 
     // Set up alarm for keepalive messages
     this.state.storage.setAlarm(Date.now() + this.keepaliveInterval);
@@ -61,18 +59,19 @@ export class TopicDO implements DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
-    // Accept the WebSocket connection
-    this.state.acceptWebSocket(server);
-
     // Parse query filters
     const url = new URL(request.url);
     const filters = this.parseFilters(url.searchParams);
 
-    // Store session info
-    this.sessions.set(server, {
+    // Store session info as attachment (survives hibernation)
+    const sessionInfo: SessionInfo = {
       connectedAt: Date.now(),
       filters,
-    });
+    };
+
+    // Accept the WebSocket connection with session attachment
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment(sessionInfo);
 
     // Send open event
     const openMsg = createOpenMessage(this.topic);
@@ -89,8 +88,9 @@ export class TopicDO implements DurableObject {
 
     // Broadcast to all connected WebSockets
     for (const ws of this.state.getWebSockets()) {
-      const session = this.sessions.get(ws);
-      if (session && this.passesFilters(message, session.filters)) {
+      // Get session info from attachment (survives hibernation)
+      const session = ws.deserializeAttachment() as SessionInfo | null;
+      if (this.passesFilters(message, session?.filters)) {
         try {
           ws.send(JSON.stringify(message));
         } catch {
@@ -148,12 +148,12 @@ export class TopicDO implements DurableObject {
 
   // Handle WebSocket close
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
-    this.sessions.delete(ws);
+    // WebSocket automatically removed from getWebSockets() when closed
   }
 
   // Handle WebSocket error
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
-    this.sessions.delete(ws);
+    // WebSocket automatically removed from getWebSockets() when closed
   }
 
   // Alarm handler for keepalive messages

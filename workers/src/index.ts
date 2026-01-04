@@ -4,14 +4,22 @@ import type { Env } from './types/env';
 import type { AuthContext } from './types/user';
 import { handlePublish } from './handlers/publish';
 import { handleSubscribeWS, handleSubscribeSSE, handleSubscribeJSON } from './handlers/subscribe';
+import { deleteExpiredMessages } from './database/messages';
 import {
   handleAccountCreate,
   handleAccountGet,
   handleAccountTokenCreate,
+  handleAccountTokenUpdate,
   handleAccountTokenDelete,
   handleAccountPasswordChange,
   handleAccountDelete,
   handleAuth,
+  handleAccountSubscriptionAdd,
+  handleAccountSubscriptionList,
+  handleAccountSubscriptionDelete,
+  handleAccountReservationAdd,
+  handleAccountReservationList,
+  handleAccountReservationDelete,
 } from './handlers/account';
 import { extractAuth } from './auth/middleware';
 import { checkTopicAccess, type AccessCheckResult } from './auth/access';
@@ -27,9 +35,10 @@ function accessDeniedResponse(access: AccessCheckResult): Response {
 // Re-export Durable Object
 export { TopicDO } from './durable-objects/TopicDO';
 
-// Extended context with auth
+// Extended context with auth and optional parsed body
 type Variables = {
   auth: AuthContext;
+  parsedBody?: Record<string, unknown>;
 };
 
 export type AppContext = {
@@ -58,12 +67,29 @@ app.use(
   '*',
   cors({
     origin: '*',
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-Title', 'X-Message', 'X-Priority', 'X-Tags', 'X-Click', 'X-Icon', 'X-Actions', 'X-Delay', 'X-Cache', 'X-Poll-ID', 'X-Markdown'],
     exposeHeaders: ['Content-Type'],
     maxAge: 86400,
   })
 );
+
+// Static assets - serve from ASSETS binding
+app.get('/static/*', async (c) => {
+  const env = c.env as Env & { ASSETS?: { fetch: typeof fetch } };
+  if (env.ASSETS) {
+    return env.ASSETS.fetch(c.req.raw);
+  }
+  return c.json({ error: 'Not found' }, 404);
+});
+
+app.get('/docs/*', async (c) => {
+  const env = c.env as Env & { ASSETS?: { fetch: typeof fetch } };
+  if (env.ASSETS) {
+    return env.ASSETS.fetch(c.req.raw);
+  }
+  return c.json({ error: 'Not found' }, 404);
+});
 
 // Root path - serve SPA
 app.get('/', async (c) => {
@@ -129,16 +155,17 @@ app.get('/v1/stats', async (c) => {
 // Config endpoint (for web UI)
 app.get('/config.js', (c) => {
   const baseUrl = new URL(c.req.url).origin;
+  const env = c.env;
   const config = {
     base_url: baseUrl,
     app_root: '/',
-    enable_login: true,
-    require_login: false,
-    enable_signup: true,
+    enable_login: env.NTFY_ENABLE_LOGIN !== 'false',
+    require_login: env.NTFY_AUTH_DEFAULT_ACCESS === 'deny-all',
+    enable_signup: env.NTFY_ENABLE_SIGNUP !== 'false',
     enable_payments: false,
     enable_calls: false,
     enable_emails: false,
-    enable_reservations: true,
+    enable_reservations: env.NTFY_ENABLE_RESERVATIONS !== 'false',
     enable_web_push: false,
     billing_contact: '',
     web_push_public_key: '',
@@ -160,6 +187,9 @@ app.get('/v1/account', handleAccountGet);
 // POST /v1/account/token - Create new token
 app.post('/v1/account/token', handleAccountTokenCreate);
 
+// PATCH /v1/account/token - Update token (rename)
+app.patch('/v1/account/token', handleAccountTokenUpdate);
+
 // DELETE /v1/account/token/:token - Delete token
 app.delete('/v1/account/token/:token', async (c) => {
   return handleAccountTokenDelete(c, c.req.param('token'));
@@ -174,7 +204,70 @@ app.delete('/v1/account', handleAccountDelete);
 // POST /auth - Login check (for ntfy compatibility)
 app.post('/auth', handleAuth);
 
+// ==================== Subscription endpoints ====================
+
+// POST /v1/account/subscription - Add subscription
+app.post('/v1/account/subscription', handleAccountSubscriptionAdd);
+
+// GET /v1/account/subscription - List subscriptions
+app.get('/v1/account/subscription', handleAccountSubscriptionList);
+
+// DELETE /v1/account/subscription - Delete subscription
+app.delete('/v1/account/subscription', handleAccountSubscriptionDelete);
+
+// ==================== Reservation endpoints ====================
+
+// POST /v1/account/reservation - Reserve a topic
+app.post('/v1/account/reservation', handleAccountReservationAdd);
+
+// GET /v1/account/reservation - List reservations
+app.get('/v1/account/reservation', handleAccountReservationList);
+
+// DELETE /v1/account/reservation/:topic - Delete reservation
+app.delete('/v1/account/reservation/:topic', async (c) => {
+  return handleAccountReservationDelete(c, c.req.param('topic'));
+});
+
 // ==================== Publish endpoints ====================
+
+// POST/PUT / - Publish message with topic in JSON body (used by web UI)
+app.post('/', async (c) => {
+  const body = await c.req.json<{ topic?: string }>();
+  const topic = body?.topic;
+
+  if (!topic || !isValidTopic(topic)) {
+    return c.json({ error: 'Invalid or missing topic' }, 400);
+  }
+
+  const auth = await extractAuth(c);
+  const access = await checkTopicAccess(c.env.DB, topic, auth, 'write');
+  if (!access.allowed) {
+    return accessDeniedResponse(access);
+  }
+
+  // Store parsed body in context for handlePublish to use
+  c.set('parsedBody', body);
+  return handlePublish(c, topic);
+});
+
+app.put('/', async (c) => {
+  const body = await c.req.json<{ topic?: string }>();
+  const topic = body?.topic;
+
+  if (!topic || !isValidTopic(topic)) {
+    return c.json({ error: 'Invalid or missing topic' }, 400);
+  }
+
+  const auth = await extractAuth(c);
+  const access = await checkTopicAccess(c.env.DB, topic, auth, 'write');
+  if (!access.allowed) {
+    return accessDeniedResponse(access);
+  }
+
+  // Store parsed body in context for handlePublish to use
+  c.set('parsedBody', body);
+  return handlePublish(c, topic);
+});
 
 // POST/PUT /{topic} - Publish message
 app.post('/:topic', async (c) => {
@@ -337,6 +430,20 @@ app.get('/:topicExt', async (c) => {
     return c.redirect('/');
   }
 
+  // Check if this is a valid topic being accessed from a browser
+  // Browsers send Accept: text/html, while API clients don't
+  if (isValidTopic(topicExt) && !RESERVED_PATHS.has(topicExt)) {
+    const accept = c.req.header('Accept') || '';
+    if (accept.includes('text/html')) {
+      // Browser request - serve SPA which will show the topic subscription page
+      const env = c.env as Env & { ASSETS?: { fetch: typeof fetch } };
+      if (env.ASSETS) {
+        return env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)));
+      }
+      return c.redirect('/');
+    }
+  }
+
   // Not a subscription request, return 404
   return c.json({ error: 'Not found' }, 404);
 });
@@ -363,4 +470,14 @@ app.get('/:topic/auth', async (c) => {
 // Export the app
 export default {
   fetch: app.fetch,
+
+  // Scheduled handler for message cleanup (runs every hour)
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        const deleted = await deleteExpiredMessages(env.DB);
+        console.log(`Cleaned up ${deleted} expired messages`);
+      })()
+    );
+  },
 };

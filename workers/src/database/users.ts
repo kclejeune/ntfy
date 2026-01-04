@@ -141,6 +141,34 @@ export async function deleteToken(db: D1Database, tokenId: string, userId: strin
   return (result.meta.changes || 0) > 0;
 }
 
+// Update a token's label and/or expires
+export async function updateTokenLabel(db: D1Database, tokenId: string, userId: string, label: string, expires?: number): Promise<Token | null> {
+  let result;
+  if (expires !== undefined) {
+    result = await db.prepare('UPDATE tokens SET label = ?, expires = ? WHERE id = ? AND user_id = ?').bind(label, expires, tokenId, userId).run();
+  } else {
+    result = await db.prepare('UPDATE tokens SET label = ? WHERE id = ? AND user_id = ?').bind(label, tokenId, userId).run();
+  }
+
+  if ((result.meta.changes || 0) === 0) {
+    return null;
+  }
+
+  // Fetch and return the updated token
+  const row = await db.prepare('SELECT id, user_id, label, last_access, last_origin, expires FROM tokens WHERE id = ?').bind(tokenId).first<TokenRow>();
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    label: row.label,
+    last_access: row.last_access,
+    last_origin: row.last_origin,
+    expires: row.expires,
+  };
+}
+
 // Get user access for a topic
 export async function getUserAccess(db: D1Database, userId: string, topic: string): Promise<UserAccess | null> {
   const row = await db.prepare('SELECT user_id, topic, read, write, owner_user_id FROM user_access WHERE user_id = ? AND topic = ?').bind(userId, topic).first<UserAccessRow>();
