@@ -5,6 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = true
 
+# Assets directory for static files (Pages-style deployment)
+assets = { directory = "./dist", binding = "ASSETS" }
+
 # D1 Database
 [[d1_databases]]
 binding = "DB"

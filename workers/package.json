@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "build:web": "cd ../web && npm run build && cp -r build/* ../workers/dist/",
+    "build": "npm run build:web",
     "db:migrate": "wrangler d1 execute ntfy --local --file=src/database/schema.sql",
     "db:migrate:remote": "wrangler d1 execute ntfy --remote --file=src/database/schema.sql",
     "typecheck": "tsc --noEmit",

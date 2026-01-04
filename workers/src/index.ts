@@ -45,7 +45,10 @@ function isValidTopic(topic: string): boolean {
 }
 
 // Reserved paths that should not be treated as topics
-const RESERVED_PATHS = new Set(['v1', 'config.js', 'docs', 'static', 'app', 'sw.js', 'manifest.webmanifest', '_app', 'auth']);
+const RESERVED_PATHS = new Set(['v1', 'config.js', 'docs', 'static', 'app', 'sw.js', 'manifest.webmanifest', '_app', 'auth', 'settings', 'account', 'login', 'signup']);
+
+// SPA routes that should serve index.html
+const SPA_ROUTES = new Set(['', 'app', 'settings', 'account', 'login', 'signup']);
 
 // Create the main Hono app
 const app = new Hono<AppContext>();
@@ -61,6 +64,53 @@ app.use(
     maxAge: 86400,
   })
 );
+
+// Root path - serve SPA
+app.get('/', async (c) => {
+  // In Pages, the static assets are served automatically
+  // Return a redirect to /app or serve index.html via ASSETS binding
+  const env = c.env as Env & { ASSETS?: { fetch: typeof fetch } };
+  if (env.ASSETS) {
+    return env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)));
+  }
+  // Fallback for standalone worker
+  return c.redirect('/app');
+});
+
+// Web manifest for PWA
+app.get('/manifest.webmanifest', (c) => {
+  const baseUrl = new URL(c.req.url).origin;
+  const manifest = {
+    name: 'ntfy',
+    short_name: 'ntfy',
+    description: 'ntfy lets you send push notifications via scripts using simple HTTP requests',
+    start_url: `${baseUrl}/app`,
+    scope: `${baseUrl}/`,
+    display: 'standalone',
+    background_color: '#ffffff',
+    theme_color: '#317f6f',
+    icons: [
+      {
+        src: '/static/images/pwa-192x192.png',
+        sizes: '192x192',
+        type: 'image/png',
+      },
+      {
+        src: '/static/images/pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+      },
+    ],
+  };
+  return c.json(manifest, 200, {
+    'Content-Type': 'application/manifest+json',
+  });
+});
+
+// Docs redirect (ensure trailing slash)
+app.get('/docs', (c) => {
+  return c.redirect('/docs/');
+});
 
 // Health check
 app.get('/v1/health', (c) => {
@@ -276,6 +326,15 @@ app.get('/:topicExt', async (c) => {
       }
       return handleSubscribeSSE(c, topic);
     }
+  }
+
+  // Check if this is a SPA route
+  if (SPA_ROUTES.has(topicExt)) {
+    const env = c.env as Env & { ASSETS?: { fetch: typeof fetch } };
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)));
+    }
+    return c.redirect('/');
   }
 
   // Not a subscription request, return 404
