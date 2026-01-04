@@ -217,7 +217,7 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
   // If no token in body, use the token from auth (update current token)
   const tokenId = body.token || auth.token.id;
 
-  // If no expires provided, extend by 72 hours from now (matches original ntfy behavior)
+  // If expires provided (including 0 for never), use it; otherwise extend by 72 hours
   const now = Math.floor(Date.now() / 1000);
   const expires = body.expires !== undefined ? body.expires : now + TOKEN_EXPIRY_SECONDS;
 

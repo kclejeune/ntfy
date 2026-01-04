@@ -135,10 +135,12 @@ class AccountApi {
       token,
       label,
     };
-    if (expires > 0) {
+    if (expires === 0) {
+      body.expires = 0;
+    } else if (expires > 0) {
       body.expires = Math.floor(Date.now() / 1000) + expires;
     }
-    console.log(`[AccountApi] Creating user access token ${url}`);
+    console.log(`[AccountApi] Updating user access token ${url}`);
     await fetchOrThrow(url, {
       method: "PATCH",
       headers: withBearerAuth({}, session.token()),
