@@ -21,6 +21,7 @@ import {
   getFilenameFromUrl,
   isBinaryContent,
 } from "../storage/attachments";
+import { broadcastWebPush } from "../push/webpush";
 
 // Parse priority from string (matches Go implementation)
 function parsePriority(s: string): number {
@@ -430,6 +431,9 @@ export async function handlePublish(
         // Forward poll request to upstream for iOS push notifications (non-blocking)
         c.executionCtx.waitUntil(forwardPollRequest(c.env, externalMsg));
 
+        // Send Web Push notifications (non-blocking)
+        c.executionCtx.waitUntil(broadcastWebPush(c.env, externalMsg));
+
         // Return the message
         return c.json(externalMsg);
       } catch (err) {
@@ -478,6 +482,9 @@ export async function handlePublish(
 
   // Forward poll request to upstream for iOS push notifications (non-blocking)
   c.executionCtx.waitUntil(forwardPollRequest(c.env, externalMsg));
+
+  // Send Web Push notifications (non-blocking)
+  c.executionCtx.waitUntil(broadcastWebPush(c.env, externalMsg));
 
   // Return the message
   return c.json(externalMsg);

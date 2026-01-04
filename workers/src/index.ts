@@ -31,6 +31,13 @@ import {
   handleAccountSettingsUpdate,
   handleTiersList,
 } from "./handlers/account";
+import {
+  handleGetVapidKey,
+  handleSubscriptionCreate,
+  handleSubscriptionUpdate,
+  handleSubscriptionDelete,
+  handleSubscriptionGet,
+} from "./handlers/webpush";
 import { extractAuth } from "./auth/middleware";
 import { checkTopicAccess, type AccessCheckResult } from "./auth/access";
 
@@ -81,6 +88,7 @@ const RESERVED_PATHS = new Set([
   "account",
   "login",
   "signup",
+  "webpush",
 ]);
 
 // SPA routes that should serve index.html
@@ -210,6 +218,7 @@ app.get("/file/:key", handleFileDownload);
 app.get("/config.js", (c) => {
   const baseUrl = new URL(c.req.url).origin;
   const env = c.env;
+  const webPushEnabled = !!(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY);
   const config = {
     base_url: baseUrl,
     app_root: "/",
@@ -220,9 +229,9 @@ app.get("/config.js", (c) => {
     enable_calls: false,
     enable_emails: false,
     enable_reservations: env.NTFY_ENABLE_RESERVATIONS !== "false",
-    enable_web_push: false,
+    enable_web_push: webPushEnabled,
     billing_contact: "",
-    web_push_public_key: "",
+    web_push_public_key: webPushEnabled ? env.VAPID_PUBLIC_KEY : "",
     disallowed_topics: [],
   };
   return c.text(`var config = ${JSON.stringify(config, null, 2)};`, 200, {
@@ -299,6 +308,23 @@ app.get("/v1/account/reservation", handleAccountReservationList);
 app.delete("/v1/account/reservation/:topic", async (c) => {
   return handleAccountReservationDelete(c, c.req.param("topic"));
 });
+
+// ==================== Web Push endpoints ====================
+
+// GET /v1/webpush/key - Get VAPID public key
+app.get("/v1/webpush/key", handleGetVapidKey);
+
+// POST /v1/webpush - Register push subscription
+app.post("/v1/webpush", handleSubscriptionCreate);
+
+// GET /v1/webpush - Get subscription info
+app.get("/v1/webpush", handleSubscriptionGet);
+
+// PATCH /v1/webpush - Update subscription topics
+app.patch("/v1/webpush", handleSubscriptionUpdate);
+
+// DELETE /v1/webpush - Unregister push subscription
+app.delete("/v1/webpush", handleSubscriptionDelete);
 
 // ==================== Publish endpoints ====================
 

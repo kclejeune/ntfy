@@ -96,6 +96,7 @@ export function isBinaryContent(contentType: string): boolean {
     "application/json",
     "application/xml",
     "application/javascript",
+    "application/x-www-form-urlencoded",
   ];
 
   return !textTypes.some((t) => contentType.startsWith(t));

@@ -109,3 +109,20 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 1);
+
+-- Web Push subscriptions
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,                           -- Optional: link to user account
+    endpoint TEXT NOT NULL UNIQUE,          -- Push service endpoint URL
+    key_p256dh TEXT NOT NULL,               -- Client public key (base64url)
+    key_auth TEXT NOT NULL,                 -- Client auth secret (base64url)
+    topics TEXT NOT NULL DEFAULT '[]',      -- JSON array of subscribed topics
+    created INTEGER NOT NULL,
+    last_success INTEGER,                   -- Last successful push timestamp
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_push_endpoint ON web_push_subscriptions(endpoint);
+CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_id);

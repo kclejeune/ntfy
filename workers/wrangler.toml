@@ -56,6 +56,7 @@ NTFY_UPSTREAM_BASE_URL = "https://ntfy.sh"
 NTFY_ATTACHMENT_FILE_SIZE_LIMIT = "15728640"    # 15MB per file
 NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT = "1073741824" # 1GB total
 NTFY_ATTACHMENT_EXPIRY_DURATION = "10800"       # 3 hours default
+VAPID_SUBJECT = "mailto:admin@kclj.io"
 
 # Development settings
 [dev]
@@ -65,3 +66,5 @@ local_protocol = "http"
 # Note: Set these secrets via `wrangler secret put`:
 # - JWT_SECRET: Secret key for signing JWT tokens
 # - NTFY_UPSTREAM_ACCESS_TOKEN: (optional) Access token for ntfy.sh rate limit exemption
+# - VAPID_PRIVATE_KEY: privkey for web push
+# - VAPID_PUBLIC_KEY: pubkey for web push

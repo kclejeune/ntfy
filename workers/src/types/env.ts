@@ -31,4 +31,9 @@ export interface Env {
 
   // Secrets (set via wrangler secret put)
   JWT_SECRET?: string;
+
+  // Web Push VAPID keys (set via wrangler secret put)
+  VAPID_PUBLIC_KEY?: string; // Base64url-encoded ECDSA P-256 public key
+  VAPID_PRIVATE_KEY?: string; // Base64url-encoded ECDSA P-256 private key
+  VAPID_SUBJECT?: string; // mailto: or https:// contact URL
 }
