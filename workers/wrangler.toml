@@ -20,6 +20,11 @@ binding = "DB"
 database_name = "ntfy"
 database_id = "dba6c366-04c0-4a9d-8d22-22e854021df2"
 
+# R2 Storage for attachments
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "ntfy-attachments"
+
 # Durable Objects
 [durable_objects]
 bindings = [
@@ -47,6 +52,10 @@ NTFY_ENABLE_RESERVATIONS = "true"
 # Upstream configuration for iOS push notifications
 NTFY_BASE_URL = "https://ntfy.kclj.io"
 NTFY_UPSTREAM_BASE_URL = "https://ntfy.sh"
+# Attachment configuration
+NTFY_ATTACHMENT_FILE_SIZE_LIMIT = "15728640"    # 15MB per file
+NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT = "1073741824" # 1GB total
+NTFY_ATTACHMENT_EXPIRY_DURATION = "10800"       # 3 hours default
 
 # Development settings
 [dev]

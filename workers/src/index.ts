@@ -8,8 +8,10 @@ import {
   handleSubscribeSSE,
   handleSubscribeJSON,
 } from "./handlers/subscribe";
+import { handleFileDownload } from "./handlers/file";
 import { deleteExpiredMessages } from "./database/messages";
 import { deleteExpiredTokens } from "./database/users";
+import { deleteExpiredAttachments } from "./storage/attachments";
 import {
   handleAccountCreate,
   handleAccountGet,
@@ -200,6 +202,9 @@ app.get("/v1/stats", async (c) => {
     messages_rate: 0,
   });
 });
+
+// File download endpoint (for attachments)
+app.get("/file/:key", handleFileDownload);
 
 // Config endpoint (for web UI)
 app.get("/config.js", (c) => {
@@ -551,6 +556,9 @@ export default {
 
         const deletedTokens = await deleteExpiredTokens(env.DB);
         console.log(`Cleaned up ${deletedTokens} expired tokens`);
+
+        const deletedAttachments = await deleteExpiredAttachments(env);
+        console.log(`Cleaned up ${deletedAttachments} expired attachments`);
       })(),
     );
   },

@@ -5,6 +5,7 @@ import type {
   InternalMessage,
   PublishRequest,
   Action,
+  Attachment,
 } from "../types/message";
 import {
   generateMessageId,
@@ -15,6 +16,11 @@ import {
 } from "../types/message";
 import { insertMessage } from "../database/messages";
 import { forwardPollRequest } from "../push/upstream";
+import {
+  storeAttachment,
+  getFilenameFromUrl,
+  isBinaryContent,
+} from "../storage/attachments";
 
 // Parse priority from string (matches Go implementation)
 function parsePriority(s: string): number {
@@ -102,59 +108,81 @@ async function parseMessage(
     }
   }
 
-  // Override/supplement with headers
-  const headerTitle =
+  // Override/supplement with headers AND query params
+  const url = new URL(c.req.url);
+
+  const title =
     c.req.header("X-Title") ||
     c.req.header("Title") ||
     c.req.header("t") ||
-    c.req.header("ti");
-  if (headerTitle) msg.title = headerTitle;
+    c.req.header("ti") ||
+    url.searchParams.get("title") ||
+    url.searchParams.get("t");
+  if (title) msg.title = title;
 
-  const headerMessage =
-    c.req.header("X-Message") || c.req.header("Message") || c.req.header("m");
-  if (headerMessage) msg.message = headerMessage;
+  const message =
+    c.req.header("X-Message") ||
+    c.req.header("Message") ||
+    c.req.header("m") ||
+    url.searchParams.get("message") ||
+    url.searchParams.get("m");
+  if (message) msg.message = message;
 
-  const headerPriority =
+  const priority =
     c.req.header("X-Priority") ||
     c.req.header("Priority") ||
     c.req.header("prio") ||
-    c.req.header("p");
-  if (headerPriority) msg.priority = parsePriority(headerPriority);
+    c.req.header("p") ||
+    url.searchParams.get("priority") ||
+    url.searchParams.get("prio") ||
+    url.searchParams.get("p");
+  if (priority) msg.priority = parsePriority(priority);
 
-  const headerTags =
+  const tags =
     c.req.header("X-Tags") ||
     c.req.header("Tags") ||
     c.req.header("tag") ||
-    c.req.header("ta");
-  if (headerTags)
-    msg.tags = headerTags
+    c.req.header("ta") ||
+    url.searchParams.get("tags") ||
+    url.searchParams.get("tag") ||
+    url.searchParams.get("ta");
+  if (tags)
+    msg.tags = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
 
-  const headerClick = c.req.header("X-Click") || c.req.header("Click");
-  if (headerClick) msg.click = headerClick;
+  const click =
+    c.req.header("X-Click") ||
+    c.req.header("Click") ||
+    url.searchParams.get("click");
+  if (click) msg.click = click;
 
-  const headerIcon = c.req.header("X-Icon") || c.req.header("Icon");
-  if (headerIcon) msg.icon = headerIcon;
+  const icon =
+    c.req.header("X-Icon") ||
+    c.req.header("Icon") ||
+    url.searchParams.get("icon");
+  if (icon) msg.icon = icon;
 
-  const headerActions = c.req.header("X-Actions") || c.req.header("Actions");
-  if (headerActions) {
+  const actions =
+    c.req.header("X-Actions") ||
+    c.req.header("Actions") ||
+    url.searchParams.get("actions");
+  if (actions) {
     try {
-      msg.actions = JSON.parse(headerActions);
+      msg.actions = JSON.parse(actions);
     } catch {
       // Ignore parse errors
     }
   }
 
-  const headerMarkdown =
+  const markdown =
     c.req.header("X-Markdown") ||
     c.req.header("Markdown") ||
-    c.req.header("md");
-  if (
-    headerMarkdown &&
-    ["1", "true", "yes"].includes(headerMarkdown.toLowerCase())
-  ) {
+    c.req.header("md") ||
+    url.searchParams.get("markdown") ||
+    url.searchParams.get("md");
+  if (markdown && ["1", "true", "yes"].includes(markdown.toLowerCase())) {
     msg.content_type = "text/markdown";
   }
 
@@ -165,6 +193,74 @@ async function parseMessage(
     "";
 
   return msg;
+}
+
+// Get attach URL from headers or query params
+function getAttachUrl(c: Context<AppContext>): string | null {
+  const url = new URL(c.req.url);
+  return (
+    c.req.header("X-Attach") ||
+    c.req.header("Attach") ||
+    c.req.header("a") ||
+    url.searchParams.get("attach") ||
+    url.searchParams.get("a") ||
+    null
+  );
+}
+
+// Get filename from headers or query params
+function getFilename(c: Context<AppContext>): string | null {
+  const url = new URL(c.req.url);
+  return (
+    c.req.header("X-Filename") ||
+    c.req.header("Filename") ||
+    c.req.header("file") ||
+    url.searchParams.get("filename") ||
+    url.searchParams.get("file") ||
+    null
+  );
+}
+
+// Check if we should treat the request body as an attachment
+function shouldTreatAsAttachment(c: Context<AppContext>): boolean {
+  // Check for explicit attachment headers or query params
+  const filename = getFilename(c);
+  const attach = getAttachUrl(c);
+
+  if (filename || attach) {
+    return true;
+  }
+
+  // Check content type for binary
+  const contentType = c.req.header("Content-Type") || "";
+  if (isBinaryContent(contentType)) {
+    return true;
+  }
+
+  return false;
+}
+
+// Parse external URL attachment (X-Attach header or ?attach= query param)
+function parseExternalAttachment(c: Context<AppContext>): Attachment | null {
+  const attach = getAttachUrl(c);
+
+  if (!attach) {
+    return null;
+  }
+
+  // Validate it's a URL
+  try {
+    new URL(attach);
+  } catch {
+    return null;
+  }
+
+  const filename = getFilename(c) || getFilenameFromUrl(attach);
+
+  return {
+    name: filename,
+    url: attach,
+  };
 }
 
 // Convert internal message to external format
@@ -185,6 +281,7 @@ function toExternalMessage(msg: InternalMessage, expires: number): Message {
   if (msg.click) external.click = msg.click;
   if (msg.icon) external.icon = msg.icon;
   if (msg.actions && msg.actions.length > 0) external.actions = msg.actions;
+  if (msg.attachment) external.attachment = msg.attachment;
   if (msg.content_type) external.content_type = msg.content_type;
 
   return external;
@@ -194,8 +291,174 @@ export async function handlePublish(
   c: Context<AppContext>,
   topic: string,
 ): Promise<Response> {
-  // Parse message from request
+  // Check if this is an attachment upload
+  const isAttachment = shouldTreatAsAttachment(c);
+
+  // For attachments, we need to handle the body before parseMessage consumes it
+  let attachment: Attachment | undefined;
+
+  if (isAttachment) {
+    // Check for external URL attachment first
+    const externalAttachment = parseExternalAttachment(c);
+    if (externalAttachment) {
+      attachment = externalAttachment;
+    } else if (c.env.ATTACHMENTS) {
+      // Upload body as attachment to R2 using streaming
+      const filename =
+        c.req.header("X-Filename") ||
+        c.req.header("Filename") ||
+        c.req.header("file") ||
+        "attachment";
+      const contentType =
+        c.req.header("Content-Type") || "application/octet-stream";
+
+      // Get Content-Length for early size check (if available)
+      const contentLengthHeader = c.req.header("Content-Length");
+      const contentLength = contentLengthHeader
+        ? parseInt(contentLengthHeader, 10)
+        : undefined;
+
+      // Generate message ID early for attachment storage
+      const messageId = generateMessageId();
+
+      try {
+        // Get the raw body stream - no buffering
+        const bodyStream = c.req.raw.body;
+        if (!bodyStream) {
+          return c.json({ code: 40001, error: "No body provided" }, 400);
+        }
+
+        // Stream directly to R2
+        attachment = await storeAttachment(
+          c.env,
+          messageId,
+          bodyStream,
+          filename,
+          contentType,
+          contentLength,
+        );
+
+        // Create message manually since we consumed the body
+        const now = Math.floor(Date.now() / 1000);
+        const reqUrl = new URL(c.req.url);
+        const msg: InternalMessage = {
+          id: messageId,
+          time: now,
+          event: EVENT_MESSAGE,
+          topic,
+          attachment,
+          message: `You received a file: ${filename}`,
+          sender:
+            c.req.header("CF-Connecting-IP") ||
+            c.req.header("X-Forwarded-For")?.split(",")[0] ||
+            "",
+        };
+
+        // Apply headers/query params for title, priority, tags, etc.
+        const msgTitle =
+          c.req.header("X-Title") ||
+          c.req.header("Title") ||
+          c.req.header("t") ||
+          c.req.header("ti") ||
+          reqUrl.searchParams.get("title") ||
+          reqUrl.searchParams.get("t");
+        if (msgTitle) msg.title = msgTitle;
+
+        const msgMessage =
+          c.req.header("X-Message") ||
+          c.req.header("Message") ||
+          c.req.header("m") ||
+          reqUrl.searchParams.get("message") ||
+          reqUrl.searchParams.get("m");
+        if (msgMessage) msg.message = msgMessage;
+
+        const msgPriority =
+          c.req.header("X-Priority") ||
+          c.req.header("Priority") ||
+          c.req.header("prio") ||
+          c.req.header("p") ||
+          reqUrl.searchParams.get("priority") ||
+          reqUrl.searchParams.get("prio") ||
+          reqUrl.searchParams.get("p");
+        if (msgPriority) msg.priority = parsePriority(msgPriority);
+
+        const msgTags =
+          c.req.header("X-Tags") ||
+          c.req.header("Tags") ||
+          c.req.header("tag") ||
+          c.req.header("ta") ||
+          reqUrl.searchParams.get("tags") ||
+          reqUrl.searchParams.get("tag") ||
+          reqUrl.searchParams.get("ta");
+        if (msgTags)
+          msg.tags = msgTags
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean);
+
+        const msgClick =
+          c.req.header("X-Click") ||
+          c.req.header("Click") ||
+          reqUrl.searchParams.get("click");
+        if (msgClick) msg.click = msgClick;
+
+        const msgIcon =
+          c.req.header("X-Icon") ||
+          c.req.header("Icon") ||
+          reqUrl.searchParams.get("icon");
+        if (msgIcon) msg.icon = msgIcon;
+
+        // Calculate expiry time
+        const defaultExpiry = parseInt(
+          c.env.NTFY_CACHE_DURATION || "43200",
+          10,
+        );
+        const expires = msg.time + defaultExpiry;
+        msg.expires = expires;
+
+        // Store in database
+        await insertMessage(c.env.DB, msg, expires);
+
+        // Broadcast to subscribers via Durable Object
+        const doId = c.env.TOPIC_DO.idFromName(topic);
+        const stub = c.env.TOPIC_DO.get(doId);
+
+        const externalMsg = toExternalMessage(msg, expires);
+
+        await stub.fetch(`https://internal/topic/${topic}/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(externalMsg),
+        });
+
+        // Forward poll request to upstream for iOS push notifications (non-blocking)
+        c.executionCtx.waitUntil(forwardPollRequest(c.env, externalMsg));
+
+        // Return the message
+        return c.json(externalMsg);
+      } catch (err) {
+        const error = err instanceof Error ? err.message : "Upload failed";
+        return c.json({ code: 40001, error }, 400);
+      }
+    } else {
+      // R2 not configured, reject attachment upload
+      return c.json(
+        { code: 40001, error: "Attachments not enabled on this server" },
+        400,
+      );
+    }
+  }
+
+  // Parse message from request (non-attachment path)
   const msg = await parseMessage(c, topic);
+
+  // Add external attachment if present
+  if (attachment) {
+    msg.attachment = attachment;
+    if (!msg.message) {
+      msg.message = `You received a file: ${attachment.name}`;
+    }
+  }
 
   // Calculate expiry time
   const defaultExpiry = parseInt(c.env.NTFY_CACHE_DURATION || "43200", 10);

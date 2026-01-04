@@ -5,6 +5,9 @@ export interface Env {
   // Durable Objects
   TOPIC_DO: DurableObjectNamespace;
 
+  // R2 Storage for attachments
+  ATTACHMENTS?: R2Bucket;
+
   // Environment variables (NTFY_ prefix for consistency with upstream ntfy)
   NTFY_CACHE_DURATION: string; // Message cache duration in seconds (default: 43200 = 12h)
   NTFY_MESSAGE_SIZE_LIMIT: string; // Max message size in bytes (default: 4096)
@@ -20,6 +23,11 @@ export interface Env {
   NTFY_BASE_URL?: string;
   NTFY_UPSTREAM_BASE_URL?: string;
   NTFY_UPSTREAM_ACCESS_TOKEN?: string;
+
+  // Attachment configuration
+  NTFY_ATTACHMENT_FILE_SIZE_LIMIT?: string; // Per-file size limit in bytes (default: 15MB)
+  NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT?: string; // Total storage limit in bytes (default: 1GB)
+  NTFY_ATTACHMENT_EXPIRY_DURATION?: string; // Attachment expiry in seconds (default: 3 hours)
 
   // Secrets (set via wrangler secret put)
   JWT_SECRET?: string;
