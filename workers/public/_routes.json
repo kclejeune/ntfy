@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "Routes dynamic API requests to Worker Functions while serving static assets directly",
+  "include": ["/*"],
+  "exclude": [
+    "/static/*",
+    "/docs/*",
+    "/*.js",
+    "/*.css",
+    "/*.png",
+    "/*.jpg",
+    "/*.ico",
+    "/*.svg",
+    "/*.woff",
+    "/*.woff2",
+    "/*.ttf",
+    "/manifest.webmanifest",
+    "/sw.js"
+  ]
+}
