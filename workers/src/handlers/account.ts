@@ -5,6 +5,7 @@ import { createUser, getUserByUsername, getUserById, getUserPasswordHash, userna
 import { validateUsername, validatePassword, verifyPassword } from '../auth/password';
 import { createUserToken } from '../auth/jwt';
 import { extractAuth } from '../auth/middleware';
+import { publishSyncEventAsync } from '../sync/notify';
 
 // POST /v1/account - Create account
 export async function handleAccountCreate(c: Context<AppContext>): Promise<Response> {
@@ -87,9 +88,31 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
   // Get user's tokens
   const tokens = await getUserTokens(c.env.DB, auth.user.id);
 
-  // Get user's reservations count
-  const reservationsResult = await c.env.DB.prepare('SELECT COUNT(*) as count FROM reservations WHERE user_id = ?').bind(auth.user.id).first<{ count: number }>();
-  const reservationsCount = reservationsResult?.count ?? 0;
+  // Get user's subscriptions
+  const subscriptionsResult = await c.env.DB.prepare(
+    'SELECT base_url, topic, display_name FROM subscriptions WHERE user_id = ?'
+  )
+    .bind(auth.user.id)
+    .all<{ base_url: string; topic: string; display_name: string }>();
+  const subscriptions = (subscriptionsResult.results || []).map((s) => ({
+    base_url: s.base_url,
+    topic: s.topic,
+    display_name: s.display_name || undefined,
+  }));
+
+  // Get user's reservations
+  const reservationsResult = await c.env.DB.prepare(
+    'SELECT topic, everyone_read, everyone_write FROM reservations WHERE user_id = ?'
+  )
+    .bind(auth.user.id)
+    .all<{ topic: string; everyone_read: number; everyone_write: number }>();
+  const reservations = (reservationsResult.results || []).map((r) => {
+    let everyone = 'deny-all';
+    if (r.everyone_read && r.everyone_write) everyone = 'read-write';
+    else if (r.everyone_read) everyone = 'read-only';
+    else if (r.everyone_write) everyone = 'write-only';
+    return { topic: r.topic, everyone };
+  });
 
   return c.json({
     username: auth.user.username,
@@ -102,8 +125,8 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
     limits: DEFAULT_LIMITS,
     stats: {
       ...DEFAULT_STATS,
-      reservations: reservationsCount,
-      reservations_remaining: DEFAULT_LIMITS.reservations - reservationsCount,
+      reservations: reservations.length,
+      reservations_remaining: DEFAULT_LIMITS.reservations - reservations.length,
     },
     tokens: tokens.map((t) => ({
       token: t.id,
@@ -112,7 +135,9 @@ export async function handleAccountGet(c: Context<AppContext>): Promise<Response
       last_origin: t.last_origin,
       expires: t.expires,
     })),
-  } as AccountResponse);
+    subscriptions,
+    reservations,
+  });
 }
 
 // POST /v1/account/token - Create new token
@@ -126,6 +151,9 @@ export async function handleAccountTokenCreate(c: Context<AppContext>): Promise<
   const body = (await c.req.json().catch(() => ({}))) as AccountTokenIssueRequest;
 
   const token = await createToken(c.env.DB, auth.user.id, body.label || '', body.expires || 0);
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({
     token: token.id,
@@ -148,6 +176,9 @@ export async function handleAccountTokenDelete(c: Context<AppContext>, tokenId: 
   if (!deleted) {
     return c.json({ code: 40401, error: 'Token not found' }, 404);
   }
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({ success: true });
 }
@@ -187,6 +218,9 @@ export async function handleAccountTokenUpdate(c: Context<AppContext>): Promise<
     return c.json({ code: 40401, error: 'Token not found' }, 404);
   }
 
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
+
   return c.json({
     token: updated.id,
     label: updated.label,
@@ -224,6 +258,9 @@ export async function handleAccountPasswordChange(c: Context<AppContext>): Promi
 
   // Update password
   await updateUserPassword(c.env.DB, auth.user.id, body.new_password);
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({ success: true });
 }
@@ -308,6 +345,9 @@ export async function handleAccountSubscriptionAdd(c: Context<AppContext>): Prom
     throw e;
   }
 
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
+
   return c.json({
     base_url: body.base_url,
     topic: body.topic,
@@ -333,6 +373,7 @@ export async function handleAccountSubscriptionList(c: Context<AppContext>): Pro
 }
 
 // DELETE /v1/account/subscription - Delete subscription
+// Supports both JSON body and headers (X-BaseUrl, X-Topic) for compatibility with web UI
 export async function handleAccountSubscriptionDelete(c: Context<AppContext>): Promise<Response> {
   const auth = await extractAuth(c);
 
@@ -340,26 +381,43 @@ export async function handleAccountSubscriptionDelete(c: Context<AppContext>): P
     return c.json({ code: 40101, error: 'Unauthorized' }, 401);
   }
 
-  let body: { base_url: string; topic: string };
-  try {
-    body = (await c.req.json()) as { base_url: string; topic: string };
-  } catch {
-    return c.json({ code: 40001, error: 'Invalid JSON body' }, 400);
+  let baseUrl: string | undefined;
+  let topic: string | undefined;
+
+  // Try headers first (web UI sends these for DELETE requests)
+  const headerBaseUrl = c.req.header('X-BaseUrl');
+  const headerTopic = c.req.header('X-Topic');
+
+  if (headerBaseUrl && headerTopic) {
+    baseUrl = headerBaseUrl;
+    topic = headerTopic;
+  } else {
+    // Fall back to JSON body
+    try {
+      const body = (await c.req.json()) as { base_url: string; topic: string };
+      baseUrl = body.base_url;
+      topic = body.topic;
+    } catch {
+      // No valid JSON body
+    }
   }
 
-  if (!body.base_url || !body.topic) {
-    return c.json({ code: 40001, error: 'base_url and topic are required' }, 400);
+  if (!baseUrl || !topic) {
+    return c.json({ code: 40001, error: 'base_url and topic are required (via headers or JSON body)' }, 400);
   }
 
   const result = await c.env.DB.prepare(
     'DELETE FROM subscriptions WHERE user_id = ? AND base_url = ? AND topic = ?'
   )
-    .bind(auth.user.id, body.base_url, body.topic)
+    .bind(auth.user.id, baseUrl, topic)
     .run();
 
   if ((result.meta.changes || 0) === 0) {
     return c.json({ code: 40401, error: 'Subscription not found' }, 404);
   }
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({ success: true });
 }
@@ -447,6 +505,9 @@ export async function handleAccountReservationAdd(c: Context<AppContext>): Promi
       .run();
   }
 
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
+
   return c.json({
     topic: body.topic,
     everyone: body.everyone || 'deny-all',
@@ -501,6 +562,9 @@ export async function handleAccountReservationDelete(c: Context<AppContext>, top
   await c.env.DB.prepare('DELETE FROM user_access WHERE topic = ? AND owner_user_id = ?')
     .bind(topic, auth.user.id)
     .run();
+
+  // Notify other clients
+  publishSyncEventAsync(c.executionCtx, c.env, auth.user);
 
   return c.json({ success: true });
 }

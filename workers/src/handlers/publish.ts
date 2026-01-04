@@ -46,12 +46,23 @@ async function parseMessage(c: Context<AppContext>, topic: string): Promise<Inte
     topic,
   };
 
-  // Parse from JSON body if applicable
-  if (contentType.includes('application/json')) {
+  // Check if body was already parsed and stored in context (for POST/PUT to /)
+  // This takes priority regardless of Content-Type since it's already parsed
+  const cachedBody = c.get('parsedBody') as PublishRequest | undefined;
+  if (cachedBody) {
+    if (cachedBody.topic) msg.topic = cachedBody.topic;
+    if (cachedBody.message) msg.message = cachedBody.message;
+    if (cachedBody.title) msg.title = cachedBody.title;
+    if (cachedBody.priority) msg.priority = cachedBody.priority;
+    if (cachedBody.tags) msg.tags = cachedBody.tags;
+    if (cachedBody.click) msg.click = cachedBody.click;
+    if (cachedBody.icon) msg.icon = cachedBody.icon;
+    if (cachedBody.actions) msg.actions = cachedBody.actions as Action[];
+    if (cachedBody.markdown) msg.content_type = 'text/markdown';
+  } else if (contentType.includes('application/json')) {
+    // Parse from JSON body if Content-Type indicates JSON
     try {
-      // Check if body was already parsed and stored in context (for POST/PUT to /)
-      const cachedBody = c.get('parsedBody') as PublishRequest | undefined;
-      const body = cachedBody || ((await c.req.json()) as PublishRequest);
+      const body = (await c.req.json()) as PublishRequest;
 
       if (body.topic) msg.topic = body.topic;
       if (body.message) msg.message = body.message;
@@ -68,7 +79,7 @@ async function parseMessage(c: Context<AppContext>, topic: string): Promise<Inte
   }
 
   // If no message from JSON, try text body
-  if (!msg.message) {
+  if (!msg.message && !cachedBody) {
     try {
       const text = await c.req.text();
       if (text) msg.message = text;

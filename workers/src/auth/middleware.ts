@@ -5,22 +5,47 @@ import { verifyJWT } from './jwt';
 import { verifyPassword } from './password';
 
 // Extract auth context from request
+// Supports:
+// - Authorization header (Bearer token or Basic auth)
+// - Query parameter: ?auth=<base64> (base64-encoded "Bearer token" or "Basic base64")
+//   (needed for WebSocket connections which can't set headers)
 export async function extractAuth(c: Context<AppContext>): Promise<AuthContext> {
-  const authHeader = c.req.header('Authorization');
+  // First check Authorization header
+  let authValue = c.req.header('Authorization');
 
-  if (!authHeader) {
+  // If no header, check query parameter (for WebSocket connections)
+  if (!authValue) {
+    const url = new URL(c.req.url);
+    const authParam = url.searchParams.get('auth');
+    if (authParam) {
+      // The web UI sends auth as base64-encoded string
+      // Try base64 decode first, fall back to URL decode
+      try {
+        authValue = atob(authParam);
+      } catch {
+        // Not valid base64, try URL decode
+        try {
+          authValue = decodeURIComponent(authParam);
+        } catch {
+          authValue = authParam;
+        }
+      }
+    }
+  }
+
+  if (!authValue) {
     return { anonymous: true };
   }
 
   // Bearer token authentication
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
+  if (authValue.startsWith('Bearer ')) {
+    const token = authValue.slice(7);
     return await authenticateBearerToken(c, token);
   }
 
   // Basic authentication
-  if (authHeader.startsWith('Basic ')) {
-    const credentials = authHeader.slice(6);
+  if (authValue.startsWith('Basic ')) {
+    const credentials = authValue.slice(6);
     return await authenticateBasic(c, credentials);
   }
 
