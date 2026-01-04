@@ -26,10 +26,13 @@ export async function extractAuth(
     const url = new URL(c.req.url);
     const authParam = url.searchParams.get("auth");
     if (authParam) {
-      // The web UI sends auth as base64-encoded string
-      // Try base64 decode first, fall back to URL decode
+      // The web UI sends auth as base64url-encoded string
+      // Convert base64url to base64 first (replace - with +, _ with /)
       try {
-        authValue = atob(authParam);
+        const base64 = authParam.replace(/-/g, "+").replace(/_/g, "/");
+        // Add padding if needed
+        const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+        authValue = atob(padded);
       } catch {
         // Not valid base64, try URL decode
         try {
