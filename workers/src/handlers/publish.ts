@@ -502,6 +502,7 @@ export interface InternalPublishRequest {
   sender?: string;
   click?: string;
   icon?: string;
+  attachment?: Attachment;
 }
 
 /**
@@ -538,6 +539,7 @@ export async function publishMessageInternal(
     tags: request.tags,
     click: request.click,
     icon: request.icon,
+    attachment: request.attachment,
     sender: request.sender || "internal",
   };
 
@@ -563,6 +565,7 @@ export async function publishMessageInternal(
   if (msg.tags && msg.tags.length > 0) externalMsg.tags = msg.tags;
   if (msg.click) externalMsg.click = msg.click;
   if (msg.icon) externalMsg.icon = msg.icon;
+  if (msg.attachment) externalMsg.attachment = msg.attachment;
 
   await stub.fetch(`https://internal/topic/${request.topic}/publish`, {
     method: "POST",
