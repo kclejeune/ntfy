@@ -47,7 +47,7 @@ NTFY_KEEPALIVE_INTERVAL = "45"       # seconds
 # Config toggles for UI
 NTFY_ENABLE_LOGIN = "true"
 NTFY_ENABLE_SIGNUP = "false"
-NTFY_AUTH_DEFAULT_ACCESS = "read-write"  # or "deny-all" to require login
+NTFY_AUTH_DEFAULT_ACCESS = "deny-all"  # or "deny-all" to require login
 NTFY_ENABLE_RESERVATIONS = "true"
 # Upstream configuration for iOS push notifications
 NTFY_BASE_URL = "https://ntfy.kclj.io"

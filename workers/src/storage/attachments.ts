@@ -102,8 +102,50 @@ export function isBinaryContent(contentType: string): boolean {
 }
 
 /**
- * Store an attachment in R2.
- * Uses streaming when Content-Length is known, otherwise buffers with size limit.
+ * Compute SHA-256 hash of data and return as hex string.
+ */
+async function computeHash(data: Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Buffer a stream with size limit check.
+ */
+async function bufferStream(
+  body: ReadableStream<Uint8Array>,
+  maxSize: number,
+): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    totalSize += value.length;
+    if (totalSize > maxSize) {
+      throw new Error(`Attachment exceeds size limit of ${maxSize} bytes`);
+    }
+    chunks.push(value);
+  }
+
+  // Combine chunks into single buffer
+  const result = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+/**
+ * Store an attachment in R2 with content-based deduplication.
+ * Uses SHA-256 hash of content as the storage key.
+ * If the same content already exists, reuses it and extends expiry if needed.
  */
 export async function storeAttachment(
   env: Env,
@@ -133,71 +175,58 @@ export async function storeAttachment(
     throw new Error(`Attachment exceeds size limit of ${fileSizeLimit} bytes`);
   }
 
-  // Determine extension from filename or content type
+  // Buffer content to compute hash (required for deduplication)
+  const bodyData = await bufferStream(body, fileSizeLimit);
+
+  // Compute SHA-256 hash of content
+  const contentHash = await computeHash(bodyData);
+
+  // Use hash + extension as key for content-addressed storage
   const ext = getExtension(filename, contentType);
-  const key = `${messageId}${ext}`;
+  const key = `${contentHash}${ext}`;
 
-  let uploadBody: ReadableStream<Uint8Array> | Uint8Array;
+  // Check if content already exists in R2
+  const existing = await env.ATTACHMENTS.head(key);
 
-  if (contentLength !== undefined && contentLength > 0) {
-    // Content-Length known: use streaming with FixedLengthStream
-    // Pipe through size limit check and wrap in FixedLengthStream for R2
-    const sizeLimitStream = createSizeLimitStream(fileSizeLimit);
-    const limitedBody = body.pipeThrough(sizeLimitStream);
+  if (existing) {
+    // Content already exists - check if we need to extend expiry
+    const existingExpiry = parseInt(
+      existing.customMetadata?.expires || "0",
+      10,
+    );
 
-    // Create a FixedLengthStream for R2
-    const { readable, writable } = new FixedLengthStream(contentLength);
-
-    // Pipe the limited body to the fixed length stream (don't await, let it stream)
-    limitedBody.pipeTo(writable).catch(() => {
-      // Errors will be caught by R2 put
+    if (expires > existingExpiry) {
+      // Extend expiry by updating metadata (requires re-upload in R2)
+      await env.ATTACHMENTS.put(key, bodyData, {
+        httpMetadata: {
+          contentType,
+          contentDisposition: `attachment; filename="${filename}"`,
+        },
+        customMetadata: {
+          originalName: filename,
+          expires: expires.toString(),
+          contentHash,
+        },
+      });
+    }
+    // Reuse existing content
+  } else {
+    // Upload new content
+    const object = await env.ATTACHMENTS.put(key, bodyData, {
+      httpMetadata: {
+        contentType,
+        contentDisposition: `attachment; filename="${filename}"`,
+      },
+      customMetadata: {
+        originalName: filename,
+        expires: expires.toString(),
+        contentHash,
+      },
     });
 
-    uploadBody = readable;
-  } else {
-    // Content-Length unknown: must buffer to know size
-    // Read stream with size limit check
-    const reader = body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalSize = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      totalSize += value.length;
-      if (totalSize > fileSizeLimit) {
-        throw new Error(
-          `Attachment exceeds size limit of ${fileSizeLimit} bytes`,
-        );
-      }
-      chunks.push(value);
+    if (!object) {
+      throw new Error("Failed to upload attachment to R2");
     }
-
-    // Combine chunks into single buffer
-    uploadBody = new Uint8Array(totalSize);
-    let offset = 0;
-    for (const chunk of chunks) {
-      uploadBody.set(chunk, offset);
-      offset += chunk.length;
-    }
-  }
-
-  // Upload to R2
-  const object = await env.ATTACHMENTS.put(key, uploadBody, {
-    httpMetadata: {
-      contentType,
-      contentDisposition: `attachment; filename="${filename}"`,
-    },
-    customMetadata: {
-      originalName: filename,
-      expires: expires.toString(),
-      messageId,
-    },
-  });
-
-  if (!object) {
-    throw new Error("Failed to upload attachment to R2");
   }
 
   const baseUrl = env.NTFY_BASE_URL || "";
@@ -205,7 +234,7 @@ export async function storeAttachment(
   return {
     name: filename,
     type: contentType,
-    size: object.size,
+    size: bodyData.byteLength,
     expires,
     url: `${baseUrl}/file/${key}`,
   };

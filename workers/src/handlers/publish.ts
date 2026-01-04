@@ -304,11 +304,7 @@ export async function handlePublish(
       attachment = externalAttachment;
     } else if (c.env.ATTACHMENTS) {
       // Upload body as attachment to R2 using streaming
-      const filename =
-        c.req.header("X-Filename") ||
-        c.req.header("Filename") ||
-        c.req.header("file") ||
-        "attachment";
+      const filename = getFilename(c) || "attachment";
       const contentType =
         c.req.header("Content-Type") || "application/octet-stream";
 

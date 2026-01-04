@@ -2,8 +2,8 @@ import type { Context } from "hono";
 import type { AppContext } from "../router";
 import { getAttachment } from "../storage/attachments";
 
-// Valid file key pattern: messageId + extension
-const FILE_KEY_REGEX = /^[a-zA-Z0-9]{12}(\.[a-zA-Z0-9]+)?$/;
+// Valid file key pattern: SHA-256 hash (64 hex chars) + optional extension
+const FILE_KEY_REGEX = /^[a-fA-F0-9]{64}(\.[a-zA-Z0-9]+)?$/;
 
 export async function handleFileDownload(
   c: Context<AppContext>,
